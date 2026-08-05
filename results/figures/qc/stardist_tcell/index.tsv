@@ -1,0 +1,11 @@
+file	image_id	n_objects	fg_fraction
+overlay_01.png	stardist_tcell/Training dataset/Training_source_ICAM  2-2-4.tif_c7236bc9-2ab0-4146-ae60-4a965d5b128e.tif	n_obj=104	fg=0.029765
+overlay_02.png	stardist_tcell/Training dataset/Training_source_ICAM  2-2-6.tif_500d81ec-863c-4e85-a811-4937037fc5b0.tif	n_obj=103	fg=0.028185
+overlay_03.png	stardist_tcell/Training dataset/Training_source_T cells 10001.tif_f3b04d17-9939-4d11-9ce8-e80023fb532c.tif	n_obj=97	fg=0.030881
+overlay_04.png	stardist_tcell/Training dataset/Training_source_T cells 10019.tif_7360e8d1-1a12-4324-90e7-74cfe517ce75.tif	n_obj=92	fg=0.026586
+overlay_05.png	stardist_tcell/Training dataset/Training_source_T cells 10019.tif_911b6e4d-69ce-4e76-a13c-b73760588fd5.tif	n_obj=93	fg=0.026639
+overlay_06.png	stardist_tcell/Training dataset/Training_source_T cells 20014.tif_bc52cf24-a42c-40c5-9895-6a9d0481162f.tif	n_obj=103	fg=0.034488
+overlay_07.png	stardist_tcell/Training dataset/Training_source_T cells 20017.tif_996ef510-ba58-44e9-8552-3c4fad57e32f.tif	n_obj=100	fg=0.033065
+overlay_08.png	stardist_tcell/Training dataset/Training_source_T cells 20019.tif_f417fc19-8187-46ba-a539-d2de895d8de9.tif	n_obj=98	fg=0.03432
+overlay_09.png	stardist_tcell/Training dataset/Training_source_VCAM 2-1-1.tif_50f48925-c673-4503-8254-2ca0759d40f5.tif	n_obj=186	fg=0.05326
+overlay_10.png	stardist_tcell/Training dataset/Training_source_VCAM 2-2-5.tif_b11bac75-e329-4503-a6fe-33984f20386f.tif	n_obj=176	fg=0.045122

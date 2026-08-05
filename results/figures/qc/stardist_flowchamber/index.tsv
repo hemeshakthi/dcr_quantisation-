@@ -1,0 +1,11 @@
+file	image_id	n_objects	fg_fraction
+overlay_01.png	stardist_flowchamber/Training dataset/FOV2 B0007.tif	n_obj=68	fg=0.023843
+overlay_02.png	stardist_flowchamber/Training dataset/FOV2 B0008.tif	n_obj=58	fg=0.020963
+overlay_03.png	stardist_flowchamber/Training dataset/FOV2 B0014.tif	n_obj=71	fg=0.028831
+overlay_04.png	stardist_flowchamber/Training dataset/FOV3 B0005.tif	n_obj=22	fg=0.008419
+overlay_05.png	stardist_flowchamber/Training dataset/FOV3 B0015.tif	n_obj=32	fg=0.013842
+overlay_06.png	stardist_flowchamber/Training dataset/t_1-5941 - FOV1 B.czi #1.tif	n_obj=131	fg=0.046774
+overlay_07.png	stardist_flowchamber/Training dataset/t_1201-5941 - FOV1 B.czi #1.tif	n_obj=100	fg=0.037816
+overlay_08.png	stardist_flowchamber/Training dataset/t_301-5941 - FOV1 B.czi #1.tif	n_obj=112	fg=0.039238
+overlay_09.png	stardist_flowchamber/Training dataset/t_4801-5941 - FOV1 B.czi #1.tif	n_obj=109	fg=0.04206
+overlay_10.png	stardist_flowchamber/Training dataset/t_5401-5941 - FOV1 B.czi #1.tif	n_obj=125	fg=0.044654

@@ -105,9 +105,15 @@ missing_topics = [t for t in required_topics if t.lower() not in assumptions_tex
 check(f"implementation_assumptions.md covers all master §0a missing items (missing: {missing_topics or 'none'})",
       not missing_topics)
 
-# 9. No functional pipeline code present yet (Phase 0 discipline)
-src_py_files = [p for p in (ROOT / "src").rglob("*.py") if p.name != "__init__.py"]
-check("no functional code under src/ yet (only __init__.py)", len(src_py_files) == 0)
+# 9. Phase-0 scaffolding integrity.
+# NOTE: this script originally asserted that NO functional code existed under src/. That
+# assertion was correct only at Phase 0 and is legitimately invalidated by Phase 1, which
+# adds src/datasets/. It is replaced by a scaffolding-integrity check; Phase 1's own
+# artefacts are verified by audit/verify_phase1.py.
+src_pkgs = [d for d in (ROOT / "src").iterdir() if d.is_dir() and not d.name.startswith("__")]
+check(f"src/ package tree intact ({len(src_pkgs)} subpackages)", len(src_pkgs) == 9)
+check("every src/ subpackage still has __init__.py",
+      all((d / "__init__.py").is_file() for d in src_pkgs))
 
 print()
 if failures:
