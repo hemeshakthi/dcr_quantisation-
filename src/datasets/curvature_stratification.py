@@ -1,7 +1,8 @@
 """Phase 2 step 3: curvature stratification (master §11).
 
 Per master §11:
-  * discrete curvature on Gaussian-smoothed (sigma=1 px) GROUND-TRUTH contours
+  * discrete curvature on Gaussian-smoothed GROUND-TRUTH contours (sigma = 2 px: an
+    AUTHORISED OVERRIDE of master §11's 1 px -- see A27 and the CONTOUR_SIGMA note below)
   * per-image score = 90th percentile of point curvature
   * 3 bins by thirds
   * write-once to data/curvature/curvature_bins.csv
@@ -41,25 +42,32 @@ from src.datasets.dataset_registry import DATA_PROCESSED, ROOT  # noqa: E402
 CURV_DIR = ROOT / "data" / "curvature"
 OUT_CSV = CURV_DIR / "curvature_bins.csv"
 
-# master §11: Gaussian smoothing of the contour, sigma = 1 px. FROZEN -- kept as the default.
-# MEASURED CAVEAT (A27), surfaced not silently overridden: sigma=1 px does not fully suppress
-# the integer-coordinate staircase of a pixelated contour. Measured over 24 images:
+# Gaussian smoothing of the contour.
+#
+# AUTHORISED OVERRIDE of master §11's sigma = 1 px -> sigma = 2 px (2026-08-06, user
+# instruction; recorded in implementation_assumptions.md A27, which is now RESOLVED rather
+# than an open question). Master §11 carries an amendment pointer to A27.
+#
+# Measured basis (24-image sweep) that motivated the override:
 #     sigma  mean 90th-pct kappa   implied radius   between-image CV
 #       1.0        0.2654              3.8 px            4.99%
 #       2.0        0.1783              5.6 px            7.81%
 #       3.0        0.1630              6.1 px           11.01%
 #       4.0        0.1608              6.2 px           12.78%
-# A curvature of 0.2654 implies a 3.8 px radius of curvature, which is SMALLER than any real
-# cell here (measured median cell radius 9.9-15.2 px) -- i.e. at sigma=1 the statistic is
-# substantially reporting pixelation rather than cell shape. The mean stabilises from sigma>=2
-# (0.178 -> 0.163 -> 0.161) while between-image discriminative spread more than doubles.
-# This is a DECISION FOR THE PROFESSOR (see A27); --sigma exposes it without editing §11.
-CONTOUR_SIGMA = 1.0
+# At sigma=1 a curvature of 0.2654 implies a 3.8 px radius of curvature, SMALLER than any real
+# cell here (measured median cell radius 9.9-15.2 px) -- the statistic was substantially
+# reporting the integer-coordinate staircase of the contour rather than cell shape. The mean
+# drops 33% from sigma=1 to sigma=2 and then stabilises (0.178 -> 0.163 -> 0.161), which is the
+# signature of pixelation being removed at sigma=2 while genuine shape curvature is retained.
+# sigma=2 is the smallest value past that knee, i.e. the least smoothing that removes the
+# artefact -- deliberately NOT sigma=3/4, which would additionally suppress the real
+# fine-scale boundary detail this study exists to measure.
+CONTOUR_SIGMA = 2.0
 # master §11: per-image score is the 90th percentile of point curvature
 SCORE_PERCENTILE = 90.0
 # [ASSUMPTION A24] Contours shorter than this are dropped before curvature is computed.
 # Discrete curvature on a handful of points is dominated by pixelation rather than shape, and
-# a sigma=1px smoother needs a few points either side to be meaningful. 16 points ~= the
+# the sigma=2px smoother needs a few points either side to be meaningful. 16 points ~= the
 # perimeter of a 3px-radius object, well below the measured median cell radius (9.9-15.2 px).
 MIN_CONTOUR_POINTS = 16
 N_SPOTCHECK = 10
@@ -150,40 +158,65 @@ def boundary_contrast(img: np.ndarray, binary: np.ndarray) -> dict:
     difference is actively misleading on these datasets: measured radial profiles show cells
     have a DARK rim (0.123) and a BRIGHT core (0.656) against a 0.496 background, so the two
     means partially cancel. The Michelson figure is retained alongside for reference only.
+
+    Computed in horizontal TILES so no full-size float32 buffer is ever allocated: this host's
+    commit limit equals physical RAM (A18) and even a 4 MiB allocation has been observed to
+    fail. `img` may be a read-only memmap; each tile is materialised with a 1-row halo so the
+    3x3 Sobel is exact on every interior row, and the running sums are mathematically identical
+    to the whole-image computation. [ENGINEERING]
     """
-    # in-place magnitude into gx: this host's commit limit equals physical RAM (A18) and a
-    # third full-size float32 buffer has been observed to fail even at 4 MiB.
-    gx = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=3)
-    # in-place magnitude: square, add, sqrt with out= so no third full-size buffer is
-    # allocated (this host's commit limit equals physical RAM, A18). np.* is used rather than
-    # cv2.magnitude's dst argument, which is positional-only and rejects dst=.
-    np.multiply(gx, gx, out=gx)
-    np.multiply(gy, gy, out=gy)
-    np.add(gx, gy, out=gx)
-    np.sqrt(gx, out=gx)
-    del gy
-    grad = gx
     edge = cv2.morphologyEx((binary > 0).astype(np.uint8), cv2.MORPH_GRADIENT,
                             np.ones((3, 3), np.uint8)).astype(bool)
-    std = float(img.std()) + 1e-8
-    out = {"contrast": float(grad[edge].mean() / std) if edge.any() else np.nan}
-    # Background mean is derived arithmetically rather than by boolean-indexing the ~97% of
-    # pixels that are background: `img[binary == 0]` materialises a ~4 MB copy, which this
-    # host has been observed to refuse (A18). Foreground is only ~3% of pixels, so indexing
-    # that side is cheap.
     fg = binary > 0
-    n_fg = int(fg.sum())
-    n_tot = int(img.size)
-    if 0 < n_fg < n_tot:
-        total = float(img.sum(dtype=np.float64))
-        fg_sum = float(img[fg].sum(dtype=np.float64))
+    h, w = binary.shape[:2]
+    tile = 256
+
+    grad_sum, grad_n = 0.0, 0
+    px_sum, px_sq, px_n = 0.0, 0.0, 0
+    fg_sum, n_fg = 0.0, 0
+
+    for y0 in range(0, h, tile):
+        y1 = min(h, y0 + tile)
+        a0, a1 = max(0, y0 - 1), min(h, y1 + 1)          # 1-row halo for the 3x3 kernel
+        blk = np.ascontiguousarray(img[a0:a1], dtype=np.float32)
+        gx = cv2.Sobel(blk, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(blk, cv2.CV_32F, 0, 1, ksize=3)
+        np.multiply(gx, gx, out=gx)
+        np.multiply(gy, gy, out=gy)
+        np.add(gx, gy, out=gx)
+        np.sqrt(gx, out=gx)
+        del gy
+
+        o0 = y0 - a0
+        o1 = o0 + (y1 - y0)
+        g = gx[o0:o1]
+        b = blk[o0:o1]
+        e = edge[y0:y1]
+        f = fg[y0:y1]
+
+        if e.any():
+            grad_sum += float(g[e].sum(dtype=np.float64))
+            grad_n += int(e.sum())
+        px_sum += float(b.sum(dtype=np.float64))
+        px_sq += float(np.square(b, dtype=np.float64).sum())
+        px_n += int(b.size)
+        if f.any():
+            fg_sum += float(b[f].sum(dtype=np.float64))
+            n_fg += int(f.sum())
+        del blk, gx, g, b, e, f
+
+    mean = px_sum / max(1, px_n)
+    var = max(0.0, px_sq / max(1, px_n) - mean * mean)
+    std = float(np.sqrt(var)) + 1e-8
+
+    out = {"contrast": float((grad_sum / grad_n) / std) if grad_n else np.nan}
+    if 0 < n_fg < px_n:
         mf = fg_sum / n_fg
-        mb = (total - fg_sum) / (n_tot - n_fg)
+        mb = (px_sum - fg_sum) / (px_n - n_fg)
         out["contrast_michelson"] = float(abs(mf - mb) / (abs(mf) + abs(mb) + 1e-8))
     else:
         out["contrast_michelson"] = np.nan
-    del grad, edge
+    del edge, fg
     return out
 
 
@@ -227,9 +260,9 @@ def save_spotcheck(df: pd.DataFrame, out_dir: Path, n: int = N_SPOTCHECK) -> lis
     take = high.sample(n=min(n, len(high)), random_state=int(rng.integers(1 << 30)))
     lines = []
     for i, (_, r) in enumerate(take.iterrows(), 1):
-        img = np.load(ROOT / r["proc_image"])
-        inst = np.load(ROOT / r["proc_instances"])
-        b = (inst > 0).astype(np.uint8)
+        img = np.load(ROOT / r["proc_image"], mmap_mode="r")
+        inst = np.load(ROOT / r["proc_instances"], mmap_mode="r")
+        b = (np.asarray(inst) > 0).astype(np.uint8)
         lo, hi = np.percentile(img[::2, ::2], 1), np.percentile(img[::2, ::2], 99)
         img8 = np.clip((img - lo) / (hi - lo + 1e-8) * 255, 0, 255).astype(np.uint8)
         k = np.ones((3, 3), np.uint8)
@@ -280,8 +313,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bin-scope", choices=["per_dataset", "global"], default="per_dataset")
     ap.add_argument("--sigma", type=float, default=CONTOUR_SIGMA,
-                    help="contour Gaussian sigma in px (default 1.0, FROZEN by master §11; "
-                         "see A27 for measured evidence that >=2 is less pixelation-driven)")
+                    help="contour Gaussian sigma in px (default 2.0 -- authorised override of "
+                         "master §11's 1.0; see A27 for the measured basis)")
     ap.add_argument("--force", action="store_true",
                     help="override the WRITE-ONCE guard (invalidates any downstream analysis)")
     args = ap.parse_args()
@@ -302,7 +335,8 @@ def main() -> int:
     print("PHASE 2 :: CURVATURE STRATIFICATION (master §11)")
     print("=" * 78)
     print(f"  contour smoothing sigma : {args.sigma} px"
-          f"{'  (master §11 default)' if args.sigma == CONTOUR_SIGMA else '  (OVERRIDDEN)'}")
+          f"{'  (project default; authorised override of master §11 1px, A27)'
+             if args.sigma == CONTOUR_SIGMA else '  (NON-DEFAULT)'}")
     print(f"  per-image score         : {SCORE_PERCENTILE}th percentile of point curvature")
     print(f"  min contour points      : {MIN_CONTOUR_POINTS}   [ASSUMPTION A24]")
     print(f"  bin scope               : {args.bin_scope}")
@@ -310,9 +344,10 @@ def main() -> int:
 
     rows = []
     for n, (_, r) in enumerate(man.iterrows(), 1):
-        img = np.load(ROOT / r["proc_image"])
-        inst = np.load(ROOT / r["proc_instances"])
-        binary = (inst > 0).astype(np.uint8)
+        # mmap: never materialise the 4 MB float32 image or the 2 MB instance map (A18)
+        img = np.load(ROOT / r["proc_image"], mmap_mode="r")
+        inst = np.load(ROOT / r["proc_instances"], mmap_mode="r")
+        binary = (np.asarray(inst) > 0).astype(np.uint8)
 
         rec = {"image_id": r["image_id"], "dataset": r["dataset"], "split": r["split"],
                "key": r["key"], "proc_image": r["proc_image"],
@@ -418,7 +453,9 @@ def main() -> int:
 
     meta = {
         "contour_sigma_px": args.sigma,
-        "contour_sigma_is_master_default": bool(args.sigma == CONTOUR_SIGMA),
+        "contour_sigma_is_project_default": bool(args.sigma == CONTOUR_SIGMA),
+        "contour_sigma_master_original": 1.0,
+        "contour_sigma_override": "AUTHORISED 2026-08-06 (A27); master §11 amended by pointer",
         "score_percentile": SCORE_PERCENTILE,
         "min_contour_points": MIN_CONTOUR_POINTS,
         "bin_scope": args.bin_scope,
@@ -432,8 +469,8 @@ def main() -> int:
         "source_labels": {"min_contour_points": "[ASSUMPTION] A24",
                           "contrast_definition": "[ASSUMPTION] A25",
                           "bin_rule": "[ASSUMPTION] A26",
-                          "sigma_pixelation_caveat": "[ASSUMPTION] A27",
-                          "sigma/percentile/3-bins": "[ENGINEERING] master §11"},
+                          "sigma_override_1px_to_2px": "[ENGINEERING] A27 (RESOLVED)",
+                          "percentile/3-bins": "[ENGINEERING] master §11"},
     }
     (CURV_DIR / "curvature_config.json").write_text(json.dumps(meta, indent=2),
                                                     encoding="utf-8")

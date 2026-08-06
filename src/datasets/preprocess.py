@@ -50,7 +50,7 @@ from src.datasets.quality_check import read_image  # noqa: E402
 #     is not (1400/16 = 87.5), so the flow-chamber data could not be kept at native size anyway.
 TARGET_SIZE = 1024
 
-# [ASSUMPTION A20] Per-image percentile normalisation, pmin=1, pmax=99.8 (CSBDeep/StarDist
+# [LITERATURE A20] Per-image percentile normalisation, pmin=1, pmax=99.8 (CSBDeep/StarDist
 # `normalize()` convention -- the very pipeline that produced these datasets' ground truth).
 # MEASURED justification: the two datasets occupy completely different raw uint16 ranges
 # (tcell p1..p99.8 ~= 2477..3021; flowchamber ~= 8692..16647, global extremes 925..28383 of a
@@ -58,6 +58,9 @@ TARGET_SIZE = 1024
 # ~0.038..0.046 -- almost no contrast -- and the two datasets would be mutually
 # unnormalisable. Per-image percentile normalisation is therefore mandatory, not stylistic.
 # NOT the 8-bit mean=0.5/std=0.5 convention, which assumes a full-range 8-bit source.
+# Label upgraded [ASSUMPTION] -> [LITERATURE] 2026-08-06: this is the published CSBDeep/StarDist
+# convention (Weigert et al. Nat Methods 2018; Schmidt et al. MICCAI 2018) and specifically the
+# one used by the ZeroCostDL4Mic/StarDist toolchain that produced these datasets' ground truth.
 NORM_PMIN, NORM_PMAX = 1.0, 99.8
 # CSBDeep's default is clip=False; retained so genuine bright outliers stay distinguishable
 # rather than being flattened onto 1.0 (this study cares about faint boundary contrast).
@@ -277,7 +280,7 @@ def main() -> int:
     print("=" * 78)
     print(f"  target resolution : {args.size}x{args.size}   [ASSUMPTION A19]")
     print(f"  normalisation     : per-image percentile p{NORM_PMIN}/p{NORM_PMAX}, "
-          f"clip={NORM_CLIP}   [ASSUMPTION A20]")
+          f"clip={NORM_CLIP}   [LITERATURE A20]")
     print(f"  resampling        : image={'INTER_AREA(down)'}, mask=INTER_NEAREST "
           f"  [ASSUMPTION A21]")
     print(f"  images to process : {len(allf)}")
@@ -401,7 +404,7 @@ def main() -> int:
                        "mask": "INTER_NEAREST"},
         "instance_masks_retained": True,
         "source_labels": {"resolution": "[ASSUMPTION] A19",
-                          "normalisation": "[ASSUMPTION] A20",
+                          "normalisation": "[LITERATURE] A20",
                           "resampling": "[ASSUMPTION] A21",
                           "binarisation": "[ASSUMPTION] A14"},
         "n_processed": int(len(man)),

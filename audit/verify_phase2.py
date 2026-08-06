@@ -180,6 +180,10 @@ if check("curvature_bins.csv exists", cb_p.is_file()):
 if check("curvature_config.json exists", ccfg_p.is_file()):
     cc = json.loads(ccfg_p.read_text(encoding="utf-8"))
     check("curvature config records sigma", cc.get("contour_sigma_px") is not None)
+    check(f"curvature config sigma == 2.0 (post-override), got {cc.get('contour_sigma_px')}",
+          float(cc.get("contour_sigma_px", 0)) == 2.0)
+    check("curvature config records the override provenance",
+          "AUTHORISED" in str(cc.get("contour_sigma_override", "")))
     check("curvature config records 90th-percentile score",
           cc.get("score_percentile") == 90.0)
     check("curvature source mask is the BINARISED mask",
@@ -195,14 +199,31 @@ check("spot-check index.tsv exists (traceability)", (spot / "index.tsv").is_file
 
 # ---- 6. assumptions --------------------------------------------------------------
 ass = (ROOT / "docs" / "implementation_assumptions.md").read_text(encoding="utf-8")
-for aid in [f"A{i}" for i in range(19, 28)]:
+for aid in [f"A{i}" for i in range(19, 29)]:
     check(f"assumption {aid} logged", f"### {aid} " in ass)
 check("resolution choice justified with measured cell radii",
       "9.9" in ass and "15.2" in ass)
 check("normalisation choice justified with measured uint16 ranges",
       "2477" in ass and "8692" in ass)
-check("A27 flags the sigma pixelation finding as a professor decision",
-      "A27" in ass and "DECISION REQUIRED" in ass)
+check("A27 records the sigma 1px->2px override as APPLIED/RESOLVED",
+      "OVERRIDDEN to 2 px" in ass and "RESOLVED / APPLIED" in ass)
+check("A20 relabelled [ASSUMPTION] -> [LITERATURE]",
+      "A20 — Per-image percentile normalisation (p1 / p99.8), clip=False  **[LITERATURE]**" in ass)
+check("A28 logs batch_size=4 for 1024px on a 16GB T4",
+      "A28" in ass and "batch_size = 4" in ass)
+check("cell-size confound collapse after the override is recorded",
+      "+0.09" in ass and "-0.54" in ass.replace("−", "-"))
+
+tm = (ROOT / "docs" / "theoretical_motivation.md").read_text(encoding="utf-8")
+# whitespace-normalised: the phrase legitimately wraps across a line in the source
+tm_flat = " ".join(tm.split())
+check("theoretical_motivation.md notes the cell-size confound + §6 partial-correlation control",
+      "cell-size confound" in tm_flat and "partial correlation" in tm_flat)
+check("theoretical_motivation.md amendment is marked as an authorised edit to a LOCKED doc",
+      "AMENDMENT" in tm and "LOCKED" in tm)
+pm = (ROOT / "PROJECT_MASTER.md").read_text(encoding="utf-8")
+check("PROJECT_MASTER §11 carries the sigma amendment pointer (no silent contradiction)",
+      "AMENDMENT" in pm and "A27" in pm)
 
 print()
 print("=" * 78)
@@ -217,5 +238,5 @@ if failures:
     sys.exit(1)
 print("RESULT: PASS — Phase 2 verification complete.")
 print("=" * 78)
-print("OPEN DECISIONS: A27 (curvature sigma=1px is pixelation-driven) and A19+A05")
-print("(batch size at 1024px) both need a call before Phase 3 training.")
+print("A27 RESOLVED: curvature sigma overridden 1px -> 2px, bins regenerated pre-training.")
+print("OPEN: A28 batch_size=4 must be confirmed against real GPU memory on the first Kaggle run.")

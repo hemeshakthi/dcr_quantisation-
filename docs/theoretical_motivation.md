@@ -38,3 +38,20 @@ alone.
 This document exists so that every later phase (training, evaluation, statistics, failure taxonomy) can
 be checked against a single frozen statement of what the study is trying to show — no phase may
 introduce a goal, metric, or comparison that isn't traceable back to P1–P6.
+
+---
+
+## AMENDMENT 2026-08-06 (authorised addition to a LOCKED document)
+
+Added on explicit instruction after Phase 2 measurement; the P1–P6 statement above is unchanged.
+
+**On the cell-size confound.** Because discrete curvature scales as κ≈1/r, a per-image curvature
+score is expected a priori to co-vary with cell size, and P2/P4/P5 could in principle be restated as
+"damage is worse for small cells"; this was anticipated, and is precisely what master §6's partial
+correlation (curvature vs boundary error, controlling for cell size and contrast) exists to control
+for — it is not a new problem. Phase 2 measured the effect directly: at the original σ=1 px contour
+smoothing the confound was strong (Spearman κ vs cell size = −0.54 tcell / −0.33 flowchamber), but
+after the authorised revision to σ=2 px (A27) it collapses to ≈0 (+0.09 / −0.05), indicating the
+σ=1 correlation was itself an artefact of contour pixelation rather than a genuine geometric
+coupling. The §6 partial-correlation control is retained regardless, now as a confirmatory check
+rather than a load-bearing one.

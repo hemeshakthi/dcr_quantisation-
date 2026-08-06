@@ -417,8 +417,16 @@ as to what the PAPER did; A19/A20/A23 record what THIS study does and why.
   a U-Net [64…1024] will not fit batch 8 on a 16 GB T4; batch size (itself [ASSUMPTION] A05)
   will need to drop to ~2–4, or random-crop training used. Flag before Phase 3.
 
-### A20 — Per-image percentile normalisation (p1 / p99.8), clip=False
-- Status: OPEN; decision forced by measurement
+### A20 — Per-image percentile normalisation (p1 / p99.8), clip=False  **[LITERATURE]**
+- Status: **RESOLVED 2026-08-06 — relabelled [ASSUMPTION] → [LITERATURE].** This is not a
+  guess made in the absence of evidence: it is the published CSBDeep/StarDist `normalize()`
+  convention (Weigert et al., *Content-aware image restoration*, Nat Methods 2018; Schmidt
+  et al., *Cell Detection with Star-convex Polygons*, MICCAI 2018), and specifically the
+  convention used by the **ZeroCostDL4Mic/StarDist toolchain that generated the ground-truth
+  masks for both of these datasets**. Following the annotation toolchain's own normalisation is
+  the best-supported available choice, independent of what the dCR paper did.
+  What remains unknown — and stays open under A03 — is only whether the dCR *paper* used this
+  same scheme; that does not affect the standing of the choice itself.
 - Measured basis: the two datasets occupy **completely different raw uint16 ranges** —
   tcell p1..p99.8 ≈ 2477..3021 (global extremes 1300..3803); flowchamber ≈ 8692..16647
   (global 925..28383) — against a 65535 full scale. Neither uses more than ~6% of the range.
@@ -511,9 +519,13 @@ as to what the PAPER did; A19/A20/A23 record what THIS study does and why.
 - Verified non-degenerate: all bins non-empty, high-bin median (0.2612) > low-bin (0.2512),
   263 distinct scores, and **both train and test contain all three bins**.
 
-### A27 — Contour smoothing σ=1 px is substantially pixelation-driven (**DECISION REQUIRED**)
-- Status: OPEN — **surfaced, not overridden. σ=1 px remains the default per master §11.**
-- What was measured (24-image sweep):
+### A27 — Contour smoothing σ: master §11's 1 px **OVERRIDDEN to 2 px** [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-06** — authorised override of master §11, on user
+  instruction, on the measured basis below. Source label upgraded [ASSUMPTION] → **[ENGINEERING]**:
+  this is no longer a guess in the absence of evidence, it is a decision *driven by* measurement.
+  `data/curvature/curvature_bins.csv` was DELETED and regenerated at σ=2; master §11 carries an
+  amendment pointer to this entry.
+- What was measured (24-image sweep) that motivated the override:
   | σ | mean 90th-pct κ | implied radius | between-image CV |
   |---|---|---|---|
   | **1.0 (master §11)** | 0.2654 | **3.8 px** | 4.99% |
@@ -531,14 +543,70 @@ as to what the PAPER did; A19/A20/A23 record what THIS study does and why.
   a "small-cell bin" — κ≈1/r. This makes master §6's partial correlation controlling for cell
   size **essential rather than optional**, and means P2/P4/P5 could otherwise be explained by
   "damage is worse for small cells".
-- Mitigating evidence: the master-mandated 10-image spot check **passed** — high-bin images
-  show genuinely elongated, pointed/teardrop cells with protrusions (migrating T-cell uropods),
-  not smooth circles. So the bins do track real shape, just noisily.
-- Final decision: **keep σ=1 px** (master §11 is FROZEN and locked before training); expose
-  `--sigma`; record this evidence. Do NOT silently change a locked parameter.
-- **Question for the professor:** should §11's σ be raised to 2–3 px, given that σ=1 yields a
-  physically impossible radius of curvature and half the discriminative power? Changing it
-  requires regenerating `curvature_bins.csv` (write-once) BEFORE any training begins.
+- Mitigating evidence at σ=1: the master-mandated 10-image spot check passed — high-bin images
+  showed genuinely elongated, pointed/teardrop cells. So the σ=1 bins did track real shape, but
+  noisily and confounded.
+
+**FINAL DECISION: σ = 2 px.** Chosen as the *smallest* value past the knee in the sweep — i.e.
+the least smoothing that removes the pixelation artefact. Deliberately NOT σ=3 or 4, which
+would additionally suppress the genuine fine-scale boundary detail this study exists to measure
+(master §6 evaluates Boundary F1 at 2 px and 5 px tolerance).
+
+**MEASURED OUTCOME after regenerating all 267 images at σ=2:**
+
+| quantity | σ=1 (old) | **σ=2 (applied)** |
+|---|---|---|
+| mean 90th-pct κ | 0.2654 | **0.1834** |
+| implied radius of curvature | 3.8 px *(impossible: < any real cell)* | **5.5 px** *(plausible: sharpest 10% of boundary points on cells of radius 9.9–15.2 px)* |
+| CV, pooled (n=267) | 4.99%\* | **6.91%** |
+| CV, tcell / flowchamber | — | **5.72% / 5.87%** |
+| **Spearman κ vs cell_size** | **−0.54 tcell / −0.33 flow** | **+0.09 tcell / −0.05 flow** |
+| Spearman κ vs median cell size | −0.58 / −0.41 | +0.02 / −0.16 |
+| bins (low/mid/high) | 89/89/89 | 89/89/89 |
+| distinct scores | 263 | 264 |
+
+\* the sweep figures were computed on a 24-image subsample; the CV column above for σ=2 is the
+full-corpus value. See the CV note in the verification report — the σ=2 CV is **6.91%**, not the
+~12.78% one might expect from the sweep table, because 12.78% was the σ=**4** row.
+
+- **The override is validated by the confound collapsing.** The cell-size correlation that made
+  the "high-curvature bin" substantially a "small-cell bin" at σ=1 (−0.54) drops to ≈0 at σ=2
+  (+0.09). This is strong evidence that the σ=1 correlation was itself an artefact of pixelation
+  — smaller cells have proportionally more staircase per unit boundary, inflating their apparent
+  curvature — rather than a real geometric relationship. Master §6's partial-correlation control
+  for cell size remains in place regardless (see docs/theoretical_motivation.md), but it is now a
+  belt-and-braces check rather than load-bearing.
+- Degeneracy + spot check re-run against the NEW σ=2 bins: all checks PASS; the 10 high-bin
+  overlays show pointed/teardrop protrusions and touching-cell junctions.
+- Residual note: the test split's bin occupancy is now low=50 / mid=12 / high=36 (train
+  39/77/53). The **high** bin — the one master §4's success criteria are stated on — has n=36,
+  which is workable; the mid bin at n=12 has limited power for any mid-bin-specific test. Bins
+  are tertiles over the whole corpus and the split was fixed earlier (A11/A17), so occupancy is
+  not tuneable without breaking one of those.
+
+### A28 — Training batch size = 4 at 1024×1024 on a 16 GB Kaggle T4
+- Status: OPEN — supersedes master §10's assumed batch of 8 for the chosen resolution (A19).
+- Missing info: the paper's batch size (A05, paywalled).
+- Why master §10's batch 8 cannot stand: A19 fixed the input at 1024×1024, four times the pixel
+  count of a 512×512 input. For the frozen U-Net (master §7, encoder [64,128,256,512,1024]) the
+  stored forward activations needed for backprop are dominated by the first level: at 1024²,
+  64 channels × 1024² × 4 B ≈ 268 MB **per tensor per sample**, and the encoder/decoder stack
+  roughly doubles that. That puts a single sample near ~2 GB of activations, so batch 8 ≈ 16 GB
+  before parameters, gradients and Adam state — it will OOM on a 16 GB T4 or P100.
+- Alternatives considered: (a) drop the resolution — rejected, A19 shows 512 collapses master
+  §6's 5 px Boundary-F1 tolerance onto the whole cell radius; (b) mixed precision — rejected for
+  final runs by master §10; (c) gradient checkpointing — adds complexity and slows training,
+  held in reserve; (d) random-crop training at native scale — viable, retained as a fallback.
+- Final decision: **batch_size = 4**, with gradient accumulation available if an effective
+  larger batch is wanted. To be confirmed against real GPU memory on the first Kaggle run and
+  reduced to 2 if it OOMs.
+- Scientific justification: batch size is held **identical across Vanilla/A/B/B′/C** (master
+  §10), so it cannot confound the B-vs-C comparison the study rests on; only wall-clock time and
+  BatchNorm statistics are affected. BatchNorm at batch 4 is noisier than at 8, which is worth
+  noting because master §9 requires a BatchNorm recalibration pass after pruning — that
+  recalibration uses frozen forward passes and is therefore unaffected.
+- Expected reproducibility impact: LOW directionally, MEDIUM on absolute values. **Verify on the
+  first Kaggle run before committing to all 24 runs.**
 
 ---
 
@@ -563,15 +631,11 @@ as to what the PAPER did; A19/A20/A23 record what THIS study does and why.
     condition represented on both sides), or require an exact 70/30 at the cost of the test set
     containing no T cells at all? This is the one Phase 1 decision that materially affects what
     the study can claim.
-14. **Curvature smoothing σ (A27) — highest-priority Phase 2 question.** Master §11 freezes
-    σ=1 px, but at σ=1 the 90th-percentile curvature is 0.2654, implying a 3.8 px radius of
-    curvature — smaller than any real cell in either dataset (median radius 9.9–15.2 px). The
-    statistic is substantially measuring contour pixelation, has half the between-image
-    discriminative power of σ≥3, and correlates −0.54 with cell size (so the "high-curvature
-    bin" is largely a "small-cell bin"). Should §11's σ be raised to 2–3 px? Must be settled
-    BEFORE training, because `curvature_bins.csv` is write-once and locked pre-training.
-15. **Batch size at 1024×1024 (A19 + A05).** The chosen resolution will not fit master §10's
-    assumed batch of 8 in 16 GB on a Kaggle T4. Reduce batch to ~2–4, or train on random crops?
+14. ~~Curvature smoothing σ (A27)~~ — **RESOLVED 2026-08-06**: overridden to σ=2 px and all
+    bins regenerated. Retained here only as a record that the change happened before any
+    training. See A27 for the measured before/after.
+15. **Batch size at 1024×1024 (A28).** Provisionally set to 4; confirm against real GPU memory
+    on the first Kaggle run before committing to all 24 runs.
 
 **No entry in this file may be marked CONFIRMED without a specific source (PDF page, professor message,
 official repo commit) recorded in the Status line.**

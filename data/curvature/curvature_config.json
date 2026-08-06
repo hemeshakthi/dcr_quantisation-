@@ -1,6 +1,8 @@
 {
-  "contour_sigma_px": 1.0,
-  "contour_sigma_is_master_default": true,
+  "contour_sigma_px": 2.0,
+  "contour_sigma_is_project_default": true,
+  "contour_sigma_master_original": 1.0,
+  "contour_sigma_override": "AUTHORISED 2026-08-06 (A27); master \u00a711 amended by pointer",
   "score_percentile": 90.0,
   "min_contour_points": 16,
   "bin_scope": "per_dataset",
@@ -15,7 +17,7 @@
     "min_contour_points": "[ASSUMPTION] A24",
     "contrast_definition": "[ASSUMPTION] A25",
     "bin_rule": "[ASSUMPTION] A26",
-    "sigma_pixelation_caveat": "[ASSUMPTION] A27",
-    "sigma/percentile/3-bins": "[ENGINEERING] master \u00a711"
+    "sigma_override_1px_to_2px": "[ENGINEERING] A27 (RESOLVED)",
+    "percentile/3-bins": "[ENGINEERING] master \u00a711"
   }
 }

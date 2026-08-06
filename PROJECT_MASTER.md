@@ -132,7 +132,9 @@ Total runs: Vanilla(3)+A(3)+[B+B′+C]×2×3 (18) = 24.
 ---
 
 ## 11. CURVATURE STRATIFICATION (locked before training) [ENGINEERING]
-Discrete curvature on Gaussian-smoothed (σ=1px) GT contours; per-image score = 90th-percentile point curvature. 3 bins by thirds. Write once to data/curvature/curvature_bins.csv (image_id, curvature_score, bin, cell_size, contrast) with write-once guard. Verify high bin has real corners/junctions (spot-check 10). Store cell size + contrast for partial-correlation confound check.
+> **AMENDMENT 2026-08-06 — σ overridden 1px → 2px (authorised).** Measurement showed σ=1px yields a 90th-percentile curvature of 0.2654, i.e. a 3.8px radius of curvature — smaller than any real cell in either dataset (median cell radius 9.9–15.2px) — so the statistic was substantially reporting contour pixelation, and correlated −0.54 with cell size. At σ=2px the implied radius is a plausible 5.5px and the cell-size confound collapses to ≈0. `curvature_bins.csv` was deleted and regenerated at σ=2 **before any training**. Full measured before/after in `docs/implementation_assumptions.md` **A27**. The rest of this section stands unchanged.
+
+Discrete curvature on Gaussian-smoothed (σ=1px → **see amendment above: σ=2px**) GT contours; per-image score = 90th-percentile point curvature. 3 bins by thirds. Write once to data/curvature/curvature_bins.csv (image_id, curvature_score, bin, cell_size, contrast) with write-once guard. Verify high bin has real corners/junctions (spot-check 10). Store cell size + contrast for partial-correlation confound check.
 
 ---
 
