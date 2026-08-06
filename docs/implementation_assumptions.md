@@ -662,6 +662,68 @@ full-corpus value. See the CV note in the verification report — the σ=2 CV is
 - Expected reproducibility impact: LOW directionally, MEDIUM on absolute values. **Verify on the
   first Kaggle run before committing to all 24 runs.**
 
+### A06-ADDENDUM — the curvature-proxy choice was validated by MEASUREMENT, not by the paper
+- Status: OPEN — records the *epistemic status* of the A06 surrogate. Added 2026-08-06.
+- **This must be stated plainly in the paper's methods section, not just here.**
+- What happened: Phase 5 chose the level-set formulation `div(∇p/|∇p|)` over the literal
+  Sobel-gradient magnitude `|∇p|` that master §8 names, and chose σ=2 px smoothing over the
+  unsmoothed alternative, on the basis of numerical experiments on synthetic shapes — a corner
+  scored 0.3166 versus a straight edge's 0.3333 under the naive choice, i.e. the proxy failed to
+  discriminate corners at all, which is the one property dCR requires of it.
+- **What that does and does not establish.** It establishes that the implemented proxy is
+  *numerically fit for purpose*: it ranks high-curvature boundary points above smooth ones, which
+  a literal `|∇p|` demonstrably does not. It does **NOT** establish that it matches the dCR
+  paper's actual equation. The paper remains closed-access with no preprint and no code
+  (docs/source_review.md §§1–2), so the true "curvature embedding space" formulation is still
+  unrecovered and unverified.
+- Consequence for how results may be described: every result produced with this loss is a result
+  for **"a curvature-weighted boundary loss in the spirit of dCR, with a numerically validated
+  curvature proxy"** — NOT a reproduction of Asha & Gopakumar (2026). Any phrasing that implies
+  the latter would misrepresent the work. Phase 8 must carry this caveat into every table and
+  claim that depends on Models A and C.
+- What would change this: the professor supplying the equation or code. The proxy is isolated
+  behind a single swappable function precisely so that replacement is a one-function change
+  (master Golden Rule 8), after which this entry is re-labelled and every affected phase re-run.
+
+### A30 — Kaggle must read hyperparameters from configs/, never restate them [ENGINEERING]
+- Status: **RESOLVED / ENFORCED 2026-08-06**
+- Why this needed enforcing: `curvature_smooth_sigma` became a config value in Phase 5. If a
+  Kaggle notebook cell restated it, that cell could drift from the repo and silently reintroduce
+  the exact pixelation bug Phase 5 fixed — and the drift would be invisible, because both runs
+  would "succeed".
+- Enforcement, in layers rather than by convention:
+  1. `experiments/multi_seed_train.py` is the single entry point; it composes every value from
+     `configs/` via `src.config.compose_run_config`. The Kaggle notebook calls it and passes
+     only a config path, a seed index and a device.
+  2. `validate_config` REJECTS a dCR run whose `curvature_smooth_sigma` is missing or ≤ 0, so a
+     drifted or defaulted value fails before training starts rather than after.
+  3. The runner echoes the resolved sigma at startup, marked as coming from the YAML.
+  4. `curvature_smooth_sigma`, `loss_band_width`, `loss_beta`, `curvature_proxy` and a SHA-256
+     `config_fingerprint` are written into every experiment-log row, so a drift is detectable
+     after the fact even if it somehow got past the front-end checks.
+- Verified: `audit/verify_phase6.py` confirms both `model_a_dcr.yaml` and
+  `model_c_pruned_dcr.yaml` declare σ=2.0, that the composed config carries it through, that
+  σ=0 and a missing σ are both rejected, and that the runner prints the YAML-resolved value.
+
+### A31 — Checkpoint/early-stopping monitor is `val_boundary_f1_2px` (which tolerance) [ASSUMPTION]
+- Status: OPEN
+- Missing info: master §10 says early stopping monitors "val Boundary F1", but master §6 defines
+  **two** Boundary-F1 tolerances (2 px and 5 px). Which one drives selection is unspecified.
+- Why it surfaced: the Phase 6 smoke test caught the configs monitoring a bare
+  `val_boundary_f1`, a key the validator never emits. The lookup failed, the monitored value
+  degraded to NaN, the tracker never improved and **no best checkpoint was ever written** —
+  while the run still reported success. Left unfixed this would have produced 24 Kaggle runs
+  with final-only checkpoints and no selectable best.
+- Final decision: monitor **`val_boundary_f1_2px`**. The 2 px tolerance is the stricter of the
+  two and therefore the more sensitive to exactly the fine boundary degradation P1/P2 predict;
+  selecting on the looser 5 px would tolerate more of the damage under study. Both tolerances
+  are still computed and reported (master §6) — this choice affects checkpoint selection only.
+- Hardening: `monitored_value` now raises a KeyError naming the available keys instead of
+  defaulting, and the Trainer deliberately does NOT catch it. A monitor typo now fails on epoch
+  0 rather than silently wasting a full training run.
+- Expected reproducibility impact: LOW — identical across all five models, so it cannot
+  confound the B/B′/C comparison; it only determines which epoch's weights are kept.
+
 ### A29 — Confirmatory test family reduced 24 → 16 (mid bin descriptive-only) [ENGINEERING]
 - Status: **RESOLVED / APPLIED 2026-08-06** (authorised, pre-training). Recorded because it is a
   deviation from master §6's stated "~24 tests".

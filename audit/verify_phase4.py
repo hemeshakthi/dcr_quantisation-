@@ -4,6 +4,7 @@ Checks the required contract -- forward (2,1,256,256)->(2,1,256,256) with negati
 present (proving no output activation), parameter count, skip-connection shape trace, and a
 scope grep -- plus the architectural invariants master §7 freezes.
 """
+import gc
 import re
 import subprocess
 import sys
@@ -45,6 +46,10 @@ check("master §7's literal encoder [64,128,256,512,1024] is accepted",
       and m_literal.bottleneck_channels == 1024)
 check("both spellings build an identical network (same parameter count)",
       m_literal.count_parameters() == m.count_parameters())
+# Released immediately: each full model is ~124 MB of parameters and this host's commit limit
+# equals physical RAM (A18). Holding all of them alive was intermittently segfaulting the audit.
+del m_literal
+gc.collect()
 check("encoder widths are (64,128,256,512)", m.encoder_channels == (64, 128, 256, 512))
 check("bottleneck is 1024", m.bottleneck_channels == 1024)
 check("decoder widths are (512,256,128,64)", m.decoder_channels == (512, 256, 128, 64))
@@ -133,12 +138,16 @@ check("decoder restores full resolution 256x256",
 # ---- 6. one class serves all five variants -----------------------------------------
 import yaml  # noqa: E402
 
-built = {}
+# Only the parameter COUNT is retained per variant, never the model itself (A18).
+param_counts = {}
 for name in ["model_vanilla.yaml", "model_a_dcr.yaml", "model_b_pruned.yaml",
              "model_b_prime_generic.yaml", "model_c_pruned_dcr.yaml"]:
     cfg = yaml.safe_load((ROOT / "configs" / name).read_text(encoding="utf-8"))
     try:
-        built[name] = UNet.from_config(cfg)
+        built = UNet.from_config(cfg)
+        param_counts[name] = built.count_parameters()
+        del built
+        gc.collect()
         ok = True
     except Exception as e:
         print(f"       {name}: {type(e).__name__}: {e}")
@@ -146,7 +155,7 @@ for name in ["model_vanilla.yaml", "model_a_dcr.yaml", "model_b_pruned.yaml",
     check(f"UNet.from_config builds {name}", ok)
 check("all five variants use the SAME class with identical architecture "
       "(architecture is never a variable, master §7)",
-      len({m2.count_parameters() for m2 in built.values()}) == 1)
+      len(set(param_counts.values())) == 1)
 
 # from_config must refuse anything that violates the frozen spec
 for bad, why in [({"model": {"architecture": "attention_unet"}}, "non-plain architecture"),
@@ -168,20 +177,25 @@ check("non-divisible-by-16 input raises a clear error rather than failing deep i
       raised)
 
 # ---- 7. seeding: model_init_seed is the ONLY thing that varies across seeds ---------
-a = UNet(init_seed=1)
-b = UNet(init_seed=1)
-c = UNet(init_seed=2)
+# Tiny models here: seeding behaviour is width-independent, and building three more full
+# 31M-param networks is what tipped this audit into a segfault under A18 memory pressure.
+_kw = dict(encoder_channels=(4, 8), bottleneck_channels=16, decoder_channels=(8, 4))
+a = UNet(init_seed=1, **_kw)
+b = UNet(init_seed=1, **_kw)
+c = UNet(init_seed=2, **_kw)
 same = all(torch.equal(p, q) for p, q in zip(a.state_dict().values(),
                                              b.state_dict().values()))
 diff = any(not torch.equal(p, q) for p, q in zip(a.state_dict().values(),
                                                  c.state_dict().values()))
+del a, b, c
+gc.collect()
 check("same init_seed -> byte-identical weights (reproducible, master §10)", same)
 check("different init_seed -> different weights (seeds are real, not cosmetic)", diff)
 pre = torch.randn(3)
 torch.manual_seed(999)
 before = torch.randn(3)
 torch.manual_seed(999)
-UNet(init_seed=7)
+UNet(init_seed=7, **_kw)
 after = torch.randn(3)
 check("constructing a seeded model does NOT disturb the caller's RNG stream "
       "(so the shared augmentation seed is unaffected)", torch.equal(before, after))

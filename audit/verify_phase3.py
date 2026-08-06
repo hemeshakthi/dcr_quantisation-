@@ -47,7 +47,8 @@ MODULES = [
     "src.compression.bn_recalibration", "src.compression.complexity",
     "src.metrics.segmentation", "src.metrics.per_image",
     "src.failure.detectors",
-    "src.training.determinism", "src.training.checkpointing",
+    "src.training.seed_manager", "src.training.checkpointing",
+    "src.training.validator",
     "src.training.trainer", "src.training.experiment_log",
     "src.evaluation.evaluate", "src.evaluation.statistics",
     "src.visualization.contours", "src.visualization.figures",
@@ -76,6 +77,12 @@ IMPLEMENTED_MODULES = {
     "src.datasets.quality_check", "src.datasets.make_split",
     "src.datasets.preprocess", "src.datasets.augmentations",
     "src.datasets.curvature_stratification",    # Phases 1-2 -> verify_phase1/2.py
+    "src.losses.boundary_band", "src.losses.dice", "src.losses.dcr_loss",
+    "src.losses.generic_boundary", "src.losses.combined",   # Phase 5 -> verify_phase5.py
+    "src.config", "src.datasets.dataset", "src.metrics.segmentation",
+    "src.training.seed_manager", "src.training.validator", "src.training.checkpointing",
+    "src.training.trainer", "src.training.experiment_log",
+    "src.compression.bn_recalibration",         # Phase 6 -> verify_phase6.py
 }
 stub_total, stub_raising = 0, 0
 for name, mod in imported.items():
@@ -197,8 +204,12 @@ check("determinism block fully enabled (master §10)",
       and ts.get("determinism", {}).get("use_deterministic_algorithms") is True)
 check("exactly 3 model-init seeds (master §10)",
       len(ts.get("seeds", {}).get("model_init_seeds", [])) == 3)
-check("early stopping monitors val_boundary_f1, NOT dice (P1 rationale)",
-      ts.get("early_stopping", {}).get("monitor") == "val_boundary_f1")
+# A31: master §6 defines TWO Boundary-F1 tolerances, so the monitor must name one explicitly.
+# A bare "val_boundary_f1" matches no validator key and silently degraded to NaN (Phase 6).
+_mon = ts.get("early_stopping", {}).get("monitor", "")
+check(f"early stopping monitors a Boundary-F1 tolerance explicitly, NOT dice "
+      f"(A31; got {_mon!r})",
+      _mon.startswith("val_boundary_f1_") and "dice" not in _mon)
 check("early stopping patience == 15 (master §10)",
       ts.get("early_stopping", {}).get("patience") == 15)
 check("image_size == 1024 (A19)", ts.get("data", {}).get("image_size") == 1024)

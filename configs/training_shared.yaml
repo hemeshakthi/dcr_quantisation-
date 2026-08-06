@@ -58,7 +58,11 @@ optimizer:
 
 scheduler:
   name: reduce_on_plateau                     # [ASSUMPTION] master §10
-  monitor: val_boundary_f1                    # [ENGINEERING] NOT Dice -- see below
+  # Master §10 says "val Boundary F1" without naming a tolerance, but §6 defines TWO (2px and
+  # 5px). The metric key must therefore be explicit or it silently resolves to nothing.
+  # 2px is chosen [ASSUMPTION A31]: it is the stricter tolerance and so the more sensitive to
+  # exactly the fine boundary damage P1/P3 are about.
+  monitor: val_boundary_f1_2px                # [ASSUMPTION] A31 -- NOT Dice, see below
   mode: max                                   # [ENGINEERING]
   factor: 0.5                                 # [ASSUMPTION]
   patience: 7                                 # [ASSUMPTION]
@@ -78,7 +82,7 @@ early_stopping:
   enabled: true                               # [ENGINEERING] master §10
   # Selection is on BOUNDARY F1, not Dice. P1 predicts Dice stays intact while boundaries
   # degrade, so selecting on Dice would be nearly blind to the quantity under study.
-  monitor: val_boundary_f1                    # [ENGINEERING] master §10
+  monitor: val_boundary_f1_2px                # [ASSUMPTION] A31 (tolerance), master §10
   mode: max                                   # [ENGINEERING]
   patience: 15                                # [ASSUMPTION] master §10
   min_delta: 0.0                              # [ASSUMPTION]
@@ -86,7 +90,7 @@ early_stopping:
 checkpointing:
   save_best: true                             # [ENGINEERING] master §10
   save_final: true                            # [ENGINEERING] master §10
-  monitor: val_boundary_f1                    # [ENGINEERING] master §10
+  monitor: val_boundary_f1_2px                # [ASSUMPTION] A31, master §10
   mode: max                                   # [ENGINEERING]
   dir: checkpoints                            # [ENGINEERING] master §15
   record_hash: true                           # [ENGINEERING] master §14 traceability
@@ -114,6 +118,7 @@ source_labels:
   training.batch_size: "[ASSUMPTION] A28"
   training.max_epochs: "[ASSUMPTION] A05"
   early_stopping.patience: "[ASSUMPTION] A05/master §10"
+  early_stopping.monitor: "[ASSUMPTION] A31 -- 2px tolerance chosen among §6's two"
   augmentation.seed: "[ENGINEERING] master §10 -- shared across B/B'/C"
   normalization.method: "[LITERATURE] A20"
   data.image_size: "[ASSUMPTION] A19"
