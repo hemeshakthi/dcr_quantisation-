@@ -65,9 +65,20 @@ for m in MODULES:
 
 # ---- 2. skeletons fail loudly rather than returning plausible values --------------
 # A stub that returned 0.0 or an empty dict would be a placeholder producing fake results
-# (master §1, Golden Rule 1). Every unimplemented body must raise NotImplementedError.
+# (master §1, Golden Rule 1). Every STILL-UNIMPLEMENTED body must raise NotImplementedError.
+# Modules receive real logic phase by phase; implemented ones are exempted here because they
+# are covered by their own phase verifier instead.
+IMPLEMENTED_MODULES = {
+    "src.models.unet",                          # Phase 4 -> audit/verify_phase4.py
+    "src.datasets.dataset_registry", "src.datasets.download_datasets",
+    "src.datasets.quality_check", "src.datasets.make_split",
+    "src.datasets.preprocess", "src.datasets.augmentations",
+    "src.datasets.curvature_stratification",    # Phases 1-2 -> verify_phase1/2.py
+}
 stub_total, stub_raising = 0, 0
 for name, mod in imported.items():
+    if name in IMPLEMENTED_MODULES:
+        continue
     if not name.startswith(("src.models", "src.losses", "src.compression", "src.metrics",
                             "src.failure", "src.training", "src.evaluation",
                             "src.visualization")) and name != "src.config":
