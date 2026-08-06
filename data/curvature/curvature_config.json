@@ -1,0 +1,21 @@
+{
+  "contour_sigma_px": 1.0,
+  "contour_sigma_is_master_default": true,
+  "score_percentile": 90.0,
+  "min_contour_points": 16,
+  "bin_scope": "per_dataset",
+  "bin_rule": "equal-count tertiles (33rd/67th percentile cut points)",
+  "curvature_source_mask": "BINARISED (what the model predicts)",
+  "cell_size_source_mask": "INSTANCE ids (mean area per instance, not per binary blob)",
+  "contrast_definition": "mean Sobel gradient along GT boundary / image intensity std",
+  "n_images": 267,
+  "n_unbinned": 0,
+  "degeneracy_problems": [],
+  "source_labels": {
+    "min_contour_points": "[ASSUMPTION] A24",
+    "contrast_definition": "[ASSUMPTION] A25",
+    "bin_rule": "[ASSUMPTION] A26",
+    "sigma_pixelation_caveat": "[ASSUMPTION] A27",
+    "sigma/percentile/3-bins": "[ENGINEERING] master \u00a711"
+  }
+}

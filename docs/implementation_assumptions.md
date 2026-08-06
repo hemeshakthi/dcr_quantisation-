@@ -390,6 +390,158 @@ source here — do not delete the historical record.
 
 ---
 
+# Phase 2 additions (preprocessing, augmentation, curvature stratification) — added 2026-08-06
+
+**Supersedes A03's "NOT YET SET"** for resolution/normalisation/augmentation. A03 remains OPEN
+as to what the PAPER did; A19/A20/A23 record what THIS study does and why.
+
+### A19 — Target resolution 1024×1024
+- Status: OPEN (paper's value unrecoverable); decision MEASURED, not conventional
+- Missing info: The resolution the dCR paper trained at.
+- Measured basis: median instance equivalent-radius is **9.9 px** (tcell, native 1024) and
+  **15.2 px** (flowchamber, native 1400); p5 radii 7.8 / 11.7 px.
+- Alternatives considered, with the measured consequence at each:
+  | Target | tcell median Ø | flow median Ø | consequence |
+  |---|---|---|---|
+  | 256 | 4.9 px | 5.5 px | cells ~5 px ACROSS — curvature destroyed; rejected outright |
+  | 512 | 9.9 px | 11.1 px | radius ~5 px, so master §6's **5 px Boundary-F1 tolerance ≈ the entire cell radius** — the study's primary metric stops discriminating |
+  | **1024** | **19.8 px** | **22.2 px** | 2 px tol = 20% of radius, 5 px = 50%; workable |
+- Final decision: **1024×1024.** It is the NATIVE size of stardist_tcell, so **210 of 267
+  images (79%) are never resampled at all** — no interpolation of the majority of the study's
+  ground-truth boundaries. Only flowchamber is rescaled, by 0.731×. 1024 is divisible by 16 as
+  the frozen 4-pooling U-Net requires; native 1400 is not (87.5), so flowchamber could not have
+  been left at native size regardless.
+- Scientific justification: this study measures boundary geometry; downsampling is precisely
+  the operation that destroys it, and the metric tolerances are fixed in pixels.
+- Expected reproducibility impact: HIGH on absolute metrics. **Operational note:** at 1024²
+  a U-Net [64…1024] will not fit batch 8 on a 16 GB T4; batch size (itself [ASSUMPTION] A05)
+  will need to drop to ~2–4, or random-crop training used. Flag before Phase 3.
+
+### A20 — Per-image percentile normalisation (p1 / p99.8), clip=False
+- Status: OPEN; decision forced by measurement
+- Measured basis: the two datasets occupy **completely different raw uint16 ranges** —
+  tcell p1..p99.8 ≈ 2477..3021 (global extremes 1300..3803); flowchamber ≈ 8692..16647
+  (global 925..28383) — against a 65535 full scale. Neither uses more than ~6% of the range.
+- Alternatives considered: fixed `/65535` scaling — **rejected on measurement**: it would map
+  tcell into ≈0.038..0.046, i.e. almost no contrast, and make the two datasets mutually
+  unnormalisable. `mean=0.5/std=0.5` — rejected, it presumes a full-range 8-bit source that
+  does not exist here.
+- Final decision: CSBDeep/StarDist `normalize(x, 1, 99.8)` per image, `clip=False`, float32.
+- Scientific justification: per-image percentile normalisation is *mandatory* given the ranges
+  above, and this specific convention is the one used by the ZeroCostDL4Mic/StarDist pipeline
+  that produced these datasets' ground truth. `clip=False` (CSBDeep default) keeps faint
+  boundary contrast distinguishable rather than flattening outliers.
+- Expected reproducibility impact: MEDIUM absolute, LOW directional (identical for all models).
+
+### A21 — Resampling kernels
+- Status: OPEN (low risk)
+- Final decision: images **INTER_AREA** when downscaling (correct area-average decimation,
+  avoids aliasing), INTER_LINEAR if ever upscaling; **both mask types INTER_NEAREST**.
+- Scientific justification: nearest is the only kernel that cannot blend two instance IDs into
+  a third nonexistent label, or soften a boundary this study then measures.
+- Verified: instance counts are **exactly preserved** through the 1400→1024 resize —
+  3678 → 3678 (flowchamber) and 24608 → 24608 (tcell, unresampled). Zero instances lost.
+
+### A22 — Alignment-test tolerance (±5%)
+- Status: OPEN (methodological, engineering)
+- What happened: three alignment statistics were tried; the first two were REJECTED on measured
+  evidence and are recorded so they are not reintroduced.
+  1. *foreground centroid vs darkest-pixel centroid* — defeated by strong illumination
+     vignetting; reported ~90 px offsets on demonstrably well-aligned pairs.
+  2. *mean intensity under the mask, minimised at zero shift* — defeated by the phase-contrast
+     donut profile. Measured radial profile: 1–2 px inside the boundary = **0.123** (dark rim),
+     6–20 px inside = **0.656** (bright core, *brighter than* the 0.496 background). Flagged
+     152/267 correctly-aligned pairs.
+  3. **boundary Sobel-gradient under the 1 px contour, maximised at zero shift** — adopted.
+     Measured on a representative image: 1.068 unshifted vs 0.94–1.01 at ±4 px and 0.63–0.69
+     at ±12 px.
+- Final decision: pass if the aligned boundary gradient is within **−5%** of the best shifted
+  one. Measured: 6/267 images tie strictly (margins −0.0013..−0.0114 against a corpus median of
+  **+0.087**); those 6 carry ~186 instances vs a corpus median of 100, i.e. they are the most
+  crowded fields where a shift lands on a *neighbouring* cell's edge. Visual inspection of the
+  worst case confirmed correct registration.
+- Result: **all 267 images pass alignment**; 0 problems.
+
+### A23 — Augmentation implemented directly on cv2/numpy, not albumentations
+- Status: OPEN
+- Missing info: the paper's augmentation policy (A03, paywalled).
+- Why not albumentations: master §16 pins **1.3.1**; the environment has **2.0.8**, whose
+  rewrite changed transform signatures and internal RNG handling. Master §10 demands full
+  determinism with an augmentation seed SHARED across B/B′/C, and the stream must be identical
+  between this Windows host and Kaggle's Linux runners — a version-dependent RNG would silently
+  desynchronise them and break the B/B′/C comparison at its foundation.
+- Final decision: explicit implementation driven by `np.random.default_rng([seed, epoch, index])`.
+  Policy: flips + rot90 (exact label-preserving symmetries), mild affine (±15°, ±10% scale,
+  ±5% shift), **mild+infrequent elastic** (p=0.25, α=12 px, σ=16), light brightness/contrast
+  (±10%) and Gaussian noise (σ=0.02).
+- Scientific justification: elastic deformation is deliberately mild because this study
+  **measures curvature** — a strong elastic field would manufacture curvature and contaminate
+  the very signal being binned (master §11). No cutout/erasing: it would fabricate false
+  boundaries.
+- Verified: 8/8 self-tests pass — repeatable per (seed, epoch, index), reproducible from a
+  fresh instance, varies with index and seed, binary mask stays exactly the instance support,
+  **no invented instance IDs**, shapes and dtypes preserved.
+
+### A24 — Minimum contour length of 16 points
+- Status: OPEN
+- Final decision: contours with <16 points are excluded from the curvature statistic.
+- Scientific justification: discrete curvature on a handful of integer-coordinate points
+  reports pixelation, not shape. 16 points ≈ the perimeter of a 3 px-radius object, far below
+  the measured median cell radius (9.9–15.2 px), so no real cell is excluded.
+
+### A25 — `contrast` defined as normalised boundary gradient
+- Status: OPEN
+- Final decision: `contrast` = mean Sobel-gradient magnitude along the GT boundary ÷ image
+  intensity std. `contrast_michelson` retained alongside for reference.
+- Scientific justification: the paper targets "weak or low **contrast boundaries**", so the
+  confound to control for (master §6 partial correlation) is boundary *visibility*. A plain
+  foreground-vs-background intensity difference is actively misleading here — the measured
+  dark-rim/bright-core profile (A22) makes the two means partially cancel.
+
+### A26 — "3 bins by thirds" read as equal-count tertiles
+- Status: OPEN
+- Final decision: cut points at the 33rd/67th percentiles of the curvature score, applied
+  **per dataset** (`--bin-scope per_dataset`).
+- Scientific justification for equal counts: keeps the per-bin paired tests (master §6)
+  balanced; equal-width thirds of the range would leave the high bin nearly empty given the
+  long right tail, destroying its statistical power. Result: **89/89/89**.
+- Scientific justification for per-dataset scope: MEASURED — only **30.5%** of tcell images
+  fall in the range shared with flowchamber. Global binning would therefore have largely
+  encoded "is a flowchamber image" as "high curvature", confounding curvature with dataset.
+- Verified non-degenerate: all bins non-empty, high-bin median (0.2612) > low-bin (0.2512),
+  263 distinct scores, and **both train and test contain all three bins**.
+
+### A27 — Contour smoothing σ=1 px is substantially pixelation-driven (**DECISION REQUIRED**)
+- Status: OPEN — **surfaced, not overridden. σ=1 px remains the default per master §11.**
+- What was measured (24-image sweep):
+  | σ | mean 90th-pct κ | implied radius | between-image CV |
+  |---|---|---|---|
+  | **1.0 (master §11)** | 0.2654 | **3.8 px** | 4.99% |
+  | 2.0 | 0.1783 | 5.6 px | 7.81% |
+  | 3.0 | 0.1630 | 6.1 px | 11.01% |
+  | 4.0 | 0.1608 | 6.2 px | 12.78% |
+- Why this matters: κ=0.2654 implies a **3.8 px radius of curvature — smaller than any real
+  cell here** (measured median cell radius 9.9–15.2 px). At σ=1 the statistic is therefore
+  substantially reporting the integer-coordinate staircase of the contour rather than cell
+  shape. The mean stabilises from σ≥2 (0.178 → 0.163 → 0.161) while between-image
+  discriminative spread **more than doubles**.
+- Related measured confound: the σ=1 score correlates most strongly with **cell size**
+  (Spearman −0.54 tcell / −0.33 flowchamber; −0.58/−0.41 against median cell size) and only
+  weakly with cell touching (+0.13/+0.09). The "high-curvature bin" is therefore substantially
+  a "small-cell bin" — κ≈1/r. This makes master §6's partial correlation controlling for cell
+  size **essential rather than optional**, and means P2/P4/P5 could otherwise be explained by
+  "damage is worse for small cells".
+- Mitigating evidence: the master-mandated 10-image spot check **passed** — high-bin images
+  show genuinely elongated, pointed/teardrop cells with protrusions (migrating T-cell uropods),
+  not smooth circles. So the bins do track real shape, just noisily.
+- Final decision: **keep σ=1 px** (master §11 is FROZEN and locked before training); expose
+  `--sigma`; record this evidence. Do NOT silently change a locked parameter.
+- **Question for the professor:** should §11's σ be raised to 2–3 px, given that σ=1 yields a
+  physically impossible radius of curvature and half the discriminative power? Changing it
+  requires regenerating `curvature_bins.csv` (write-once) BEFORE any training begins.
+
+---
+
 ## Open questions requiring professor input (cross-ref docs/source_review.md §5)
 
 1. Full paper PDF / paywall-free access.
@@ -411,6 +563,15 @@ source here — do not delete the historical record.
     condition represented on both sides), or require an exact 70/30 at the cost of the test set
     containing no T cells at all? This is the one Phase 1 decision that materially affects what
     the study can claim.
+14. **Curvature smoothing σ (A27) — highest-priority Phase 2 question.** Master §11 freezes
+    σ=1 px, but at σ=1 the 90th-percentile curvature is 0.2654, implying a 3.8 px radius of
+    curvature — smaller than any real cell in either dataset (median radius 9.9–15.2 px). The
+    statistic is substantially measuring contour pixelation, has half the between-image
+    discriminative power of σ≥3, and correlates −0.54 with cell size (so the "high-curvature
+    bin" is largely a "small-cell bin"). Should §11's σ be raised to 2–3 px? Must be settled
+    BEFORE training, because `curvature_bins.csv` is write-once and locked pre-training.
+15. **Batch size at 1024×1024 (A19 + A05).** The chosen resolution will not fit master §10's
+    assumed batch of 8 in 16 GB on a Kaggle T4. Reduce batch to ~2–4, or train on random crops?
 
 **No entry in this file may be marked CONFIRMED without a specific source (PDF page, professor message,
 official repo commit) recorded in the Status line.**
