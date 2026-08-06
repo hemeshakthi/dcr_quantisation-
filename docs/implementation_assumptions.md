@@ -157,6 +157,60 @@ source here — do not delete the historical record.
   curvature-weighted boundary loss in the spirit of dCR," not a reproduction of the paper's exact
   method.
 
+#### A06 addendum — Phase 5 implementation, with the two measured deviations from §8's wording
+
+**As implemented** (`src/losses/dcr_loss.py`), per band pixel:
+
+    kappa  = proxy( gaussian_blur(mask, sigma) )
+    k_rel  = clamp( kappa / quantile_95_over_band(kappa), 0, 1 )
+    w      = 1 + gamma * k_rel ** power          # bounded in [1, 1+gamma]
+    loss   = weighted-mean BCE over extract_boundary_band(target, band_width)
+
+Defaults: `band_width=3`, `gamma=1.0`, `power=1.0`, `sigma=2.0`, `proxy=sobel_levelset`,
+`curvature_source=target`, `normalise_weights=true`.
+
+**Deviation 1 — the proxy is level-set curvature, not raw |∇p|.** Master §8 words the proxy as
+"Sobel-gradient magnitude". Taken literally, |∇p| measures edge STRENGTH, which is near-constant
+along a boundary and therefore near-identical at a sharp corner and along a straight edge.
+MEASURED on a synthetic square: raw |∇p| gives a corner/edge weight ratio of **0.935** — it
+weights corners slightly LESS than straight edges. Weighting by it would make dCR a flat
+boundary loss up to a scale factor, i.e. numerically almost the same objective as
+GenericBoundaryLoss, and **the B′-vs-C comparison (P5) would be testing nothing**. We therefore
+build the proxy FROM Sobel derivatives as §8 directs, but form the textbook level-set curvature
+κ = div(∇p/|∇p|), measured corner/edge ratio **1.661**. `sobel_magnitude` stays in the registry
+so the literal reading remains available and auditable, but it is not the default.
+
+**Deviation 2 — the mask must be Gaussian-smoothed before differentiating.** Curvature of an
+unsmoothed binary mask is the second derivative of a step function: it reports the pixel
+staircase, not the shape. MEASURED, level-set κ on a synthetic square:
+
+| σ | corner κ | straight-edge κ | discriminates? |
+|---|---|---|---|
+| 0 (hard mask) | 0.3166 | 0.3333 | **no** — edge scores *higher* |
+| 1.0 | 0.1877 | 0.00000 | yes |
+| **2.0 (default)** | **0.1770** | **0.00000** | yes |
+
+At σ=2 a straight edge has EXACTLY zero curvature, as it should, and only corners survive. This
+is the same phenomenon A27 documented for the §11 contour statistic, reached independently
+here — and σ=2 matches A27's authorised value, so the two places now agree.
+
+**Bounded weighting.** Normalising by a 95th-percentile over the band and clamping to [0,1]
+keeps `w ∈ [1, 1+gamma]`, so `gamma` is directly interpretable as "a maximally-curved pixel gets
+at most (1+gamma)× the weight of a straight-edge pixel". Normalising by the mean instead would
+let a few very sharp corners push weights to arbitrary multiples and effectively switch off
+straight-edge supervision; a quantile rather than the max stops one noisy pixel setting the
+scale.
+
+**gamma=0 collapses dCR EXACTLY to GenericBoundaryLoss** — verified numerically to <1e-6, both
+in the weight map and in the loss value. The control is therefore an exact special case of the
+treatment, not a lookalike implementation, which is a stronger guarantee for P5 than two
+separate code paths that merely look similar.
+
+**Swap point for the real equation.** The proxy is behind a registry:
+`register_curvature_proxy("official", fn)` then `curvature_proxy: official` in the model YAML.
+No other code changes. Set `curvature_smooth_sigma: 0` if the official formulation does its own
+smoothing.
+
 ---
 
 ### A07 — Post-processing of model outputs

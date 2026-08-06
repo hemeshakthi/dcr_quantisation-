@@ -25,7 +25,7 @@ loss:
     smooth: 1.0e-5                            # [PAPER] master §8
     alpha: 1.0                                # [ENGINEERING]
   boundary:
-    # *** SURROGATE, NOT THE PAPER'S EQUATION *** -- see A06 and src/losses/dcr.py.
+    # *** SURROGATE, NOT THE PAPER'S EQUATION *** -- see A06 and src/losses/dcr_loss.py.
     # The paper is closed-access with no code, so the exact "curvature embedding space"
     # formulation is unrecoverable. Every result using this is a result for "a
     # curvature-weighted boundary loss in the spirit of dCR", not a reproduction of dCR.
@@ -34,7 +34,20 @@ loss:
     beta: 1.0                                 # [ASSUMPTION] A06
     # band_width MUST match model_b_prime_generic.yaml or P5 is confounded (master §8).
     band_width: 3                             # [ASSUMPTION] A06
+    # Weighting strength. gamma=0 collapses dCR EXACTLY to GenericBoundaryLoss, which is why
+    # the control is an exact special case of the treatment rather than a lookalike.
+    curvature_gamma: 1.0                      # [ASSUMPTION] A06
     curvature_weight_power: 1.0               # [ASSUMPTION] A06
+    # THE SWAP POINT for the paper's real equation: register it and name it here (A06).
+    # "sobel_magnitude" is master §8's literal wording, kept for ablation but NOT default --
+    # |grad p| is ~constant along a boundary and cannot tell a corner from a straight edge,
+    # which would make dCR numerically almost identical to the flat control and void P5.
+    curvature_proxy: sobel_levelset           # [ASSUMPTION] A06
+    # MANDATORY for hard binary targets: curvature of an unsmoothed binary mask is the second
+    # derivative of a step function and reports pixel staircase, not shape. MEASURED: at
+    # sigma=0 a corner scores 0.317 vs 0.333 on a straight edge (no discrimination); at
+    # sigma=2 the straight edge is EXACTLY 0.000. Matches A27's value for the same reason.
+    curvature_smooth_sigma: 2.0               # [ASSUMPTION] A06
     normalise_weights: true                   # [ENGINEERING] stops curved images dominating the batch
     # "target" keeps weights fixed; "prediction" would let the model lower its own loss by
     # flattening boundaries -- a degenerate solution worth avoiding.
@@ -50,4 +63,6 @@ source_labels:
   loss.boundary.name: "[ASSUMPTION] A06 -- SURROGATE, not the paper's equation"
   loss.boundary.band_width: "[ASSUMPTION] A06 -- must equal B' band_width"
   loss.boundary.curvature_source: "[ASSUMPTION] A06"
+  loss.boundary.curvature_proxy: "[ASSUMPTION] A06 -- swap point for the real equation"
+  loss.boundary.curvature_gamma: "[ASSUMPTION] A06"
   model.encoder_channels: "[ASSUMPTION] A08"

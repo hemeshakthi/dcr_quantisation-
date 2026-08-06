@@ -41,7 +41,7 @@ MODULES = [
     "src.datasets.preprocess", "src.datasets.augmentations",
     "src.datasets.curvature_stratification", "src.datasets.dataset",
     "src.models.unet",
-    "src.losses.boundary_band", "src.losses.dice", "src.losses.dcr",
+    "src.losses.boundary_band", "src.losses.dice", "src.losses.dcr_loss",
     "src.losses.generic_boundary", "src.losses.combined",
     "src.compression.channel_mask", "src.compression.l1_structured",
     "src.compression.bn_recalibration", "src.compression.complexity",
@@ -70,6 +70,8 @@ for m in MODULES:
 # are covered by their own phase verifier instead.
 IMPLEMENTED_MODULES = {
     "src.models.unet",                          # Phase 4 -> audit/verify_phase4.py
+    "src.losses.boundary_band", "src.losses.dice", "src.losses.dcr_loss",
+    "src.losses.generic_boundary", "src.losses.combined",   # Phase 5 -> verify_phase5.py
     "src.datasets.dataset_registry", "src.datasets.download_datasets",
     "src.datasets.quality_check", "src.datasets.make_split",
     "src.datasets.preprocess", "src.datasets.augmentations",
@@ -256,10 +258,24 @@ check("curvature-related vs non-curvature-related declared before results (P6, m
       len(fd.get("curvature_related", [])) == 3 and len(fd.get("non_curvature_related", [])) == 3)
 
 # ---- 7. OUT-OF-SCOPE scan (master §1) ---------------------------------------------
-FORBIDDEN = ["distill", "quant", "onnx", "tensorrt", "betti", "cross_stain",
-             "crossstain", "transformer", "attention", "unetpp", "unet++",
-             "persistent_homology", "cldice"]
+# Regex, not bare substrings: a plain "quant" match also fires on `band_quantile`, which is a
+# statistical quantile and has nothing to do with quantization. Matching whole concepts keeps
+# the scan honest instead of forcing legitimate code to be renamed around it.
+FORBIDDEN = [
+    r"distill",
+    r"quantiz|quantis",              # master §1 excludes quantization, NOT statistical quantiles
+    r"onnx", r"tensorrt", r"betti",
+    r"cross[_-]?stain",
+    r"transformer", r"attention",
+    r"unet\+\+|unetpp",
+    r"persistent[_-]?homology",
+    r"cldice",
+]
+# Filenames are scanned everywhere. CONTENT is scanned in the project source only: the audit
+# scripts must NAME the excluded techniques in order to test for them, so scanning their own
+# term lists for those terms is circular and would always fail.
 scan_dirs = ["src", "configs", "audit", "tests", "backend", "frontend"]
+content_scan_dirs = {"src", "configs", "tests", "backend", "frontend"}
 name_hits, content_hits = [], []
 for d in scan_dirs:
     base = ROOT / d
@@ -271,15 +287,17 @@ for d in scan_dirs:
             continue
         low = p.name.lower()
         for term in FORBIDDEN:
-            if term in low:
-                name_hits.append(f"{p.relative_to(ROOT)} (filename contains '{term}')")
+            if re.search(term, low):
+                name_hits.append(f"{p.relative_to(ROOT)} (filename matches '{term}')")
+        if d not in content_scan_dirs:
+            continue
         try:
             text = p.read_text(encoding="utf-8", errors="ignore").lower()
         except Exception:
             continue
         for term in FORBIDDEN:
             for ln, line in enumerate(text.splitlines(), 1):
-                if term not in line:
+                if not re.search(term, line):
                     continue
                 # Prose that NAMES an excluded technique in order to exclude it is required by
                 # master §1; only an actual import/definition would be a scope violation.

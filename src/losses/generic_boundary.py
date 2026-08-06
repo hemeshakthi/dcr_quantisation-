@@ -11,18 +11,24 @@ weighted FLAT instead of by curvature. It therefore:
   * differs ONLY in that every band pixel gets weight 1
 
 If C beats B', the improvement is attributable to curvature-awareness rather than to
-boundary-awareness in general -- that is prediction P5, and it is the study's strongest claim.
-Any divergence between this class and DCRLoss beyond the weighting silently destroys that
-inference, so changes here must be mirrored in dcr.py or the comparison is invalid.
+boundary-awareness in general -- that is prediction P5, the study's strongest claim. Any
+divergence between this class and DCRLoss beyond the weighting silently destroys that
+inference, so changes here must be mirrored in dcr_loss.py.
 
-Note the two losses must also be gradient-matched, which is a separate concern handled by
-`CombinedLoss.calibrate_beta_by_gradient_norm()` -- equal band and equal formula are not
-enough if the two terms enter the total loss at different magnitudes.
+Formally this loss is exactly `DCRLoss(curvature_gamma=0)`; verification asserts that identity
+numerically, which is a stronger guarantee than the two implementations merely looking alike.
+
+Equal band and equal formula are still not sufficient on their own: the two terms must also
+enter the total loss at matched gradient magnitude, which is
+`CombinedLoss.calibrate_beta_by_gradient_norm()`'s job.
 """
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from src.losses.boundary_band import extract_boundary_band
 
 
 class GenericBoundaryLoss(nn.Module):
@@ -33,31 +39,36 @@ class GenericBoundaryLoss(nn.Module):
         from_logits: the head emits raw logits (master §7).
     """
 
-    def __init__(self, band_width: int = 3, from_logits: bool = True) -> None:
+    def __init__(self, band_width: int = 3, eps: float = 1e-6,
+                 from_logits: bool = True) -> None:
         super().__init__()
-        self.band_width = band_width
-        self.from_logits = from_logits
-
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """Args: logits (B,1,H,W); target (B,1,H,W) in {0,1}. Returns: scalar loss."""
-        raise NotImplementedError
+        self.band_width = int(band_width)
+        self.eps = float(eps)
+        self.from_logits = bool(from_logits)
 
     def weight_map(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Per-pixel weights actually applied: the band itself, uniformly 1.
 
         Same signature as DCRLoss.weight_map so the two can be plotted side by side and the
-        difference in where gradient lands can be shown rather than asserted.
+        difference in WHERE gradient lands can be shown rather than asserted.
         """
-        raise NotImplementedError
+        return extract_boundary_band(target, self.band_width)
 
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Args: logits (B,1,H,W); target (B,1,H,W) in {0,1}. Returns: scalar loss."""
+        if logits.shape != target.shape:
+            raise ValueError(f"shape mismatch: {tuple(logits.shape)} vs {tuple(target.shape)}")
+        weights = self.weight_map(logits, target)
+        bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none") \
+            if self.from_logits else \
+            F.binary_cross_entropy(logits.clamp(1e-7, 1 - 1e-7), target, reduction="none")
+        num = (weights * bce).sum()
+        den = weights.sum()
+        # Empty band (no foreground): keep the graph connected rather than returning a
+        # detached constant -- identical handling to DCRLoss, deliberately.
+        if float(den) <= 0.0:
+            return logits.sum() * 0.0
+        return num / (den + self.eps)
 
-def assert_bands_identical(dcr_loss, generic_loss, sample_mask: torch.Tensor) -> None:
-    """Assert the two losses extract a PIXEL-IDENTICAL band from the same mask.
-
-    Master §8 requires this. It is checked as a test rather than assumed, because a silent
-    divergence would confound P5 without producing any visible error.
-
-    Raises:
-        AssertionError: if the bands differ anywhere, or the band widths differ.
-    """
-    raise NotImplementedError
+    def extra_repr(self) -> str:
+        return f"band_width={self.band_width}, from_logits={self.from_logits}"

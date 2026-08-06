@@ -31,14 +31,27 @@ loss:
     smooth: 1.0e-5                            # [PAPER] master §8
     alpha: 1.0                                # [ENGINEERING] identical to B/B'
   boundary:
-    # *** SURROGATE, NOT THE PAPER'S EQUATION *** -- A06, src/losses/dcr.py.
+    # *** SURROGATE, NOT THE PAPER'S EQUATION *** -- A06, src/losses/dcr_loss.py.
     # Results here are results for "a curvature-weighted boundary loss in the spirit of dCR".
     # REPLACE THE MOMENT THE REAL EQUATION ARRIVES (Golden Rule 8) and re-run every phase
     # that depends on it.
     name: dcr                                 # [ASSUMPTION] A06
     beta: 1.0                                 # [ASSUMPTION] A06 -- B' is calibrated to match this
     band_width: 3                             # [ASSUMPTION] A06 -- MUST equal B'
+    # Weighting strength. gamma=0 collapses dCR EXACTLY to GenericBoundaryLoss, which is why
+    # the control is an exact special case of the treatment rather than a lookalike.
+    curvature_gamma: 1.0                      # [ASSUMPTION] A06
     curvature_weight_power: 1.0               # [ASSUMPTION] A06
+    # THE SWAP POINT for the paper's real equation: register it and name it here (A06).
+    # "sobel_magnitude" is master §8's literal wording, kept for ablation but NOT default --
+    # |grad p| is ~constant along a boundary and cannot tell a corner from a straight edge,
+    # which would make dCR numerically almost identical to the flat control and void P5.
+    curvature_proxy: sobel_levelset           # [ASSUMPTION] A06
+    # MANDATORY for hard binary targets: curvature of an unsmoothed binary mask is the second
+    # derivative of a step function and reports pixel staircase, not shape. MEASURED: at
+    # sigma=0 a corner scores 0.317 vs 0.333 on a straight edge (no discrimination); at
+    # sigma=2 the straight edge is EXACTLY 0.000. Matches A27's value for the same reason.
+    curvature_smooth_sigma: 2.0               # [ASSUMPTION] A06
     normalise_weights: true                   # [ENGINEERING]
     curvature_source: target                  # [ASSUMPTION] A06 -- identical to Model A
 
@@ -57,4 +70,6 @@ source_labels:
   loss.boundary.name: "[ASSUMPTION] A06 -- SURROGATE, not the paper's equation"
   loss.boundary.beta: "[ASSUMPTION] A06 -- reference for B' gradient calibration"
   loss.boundary.band_width: "[ASSUMPTION] A06 -- MUST equal Model B'"
+  loss.boundary.curvature_proxy: "[ASSUMPTION] A06 -- swap point for the real equation"
+  loss.boundary.curvature_gamma: "[ASSUMPTION] A06"
   pruning.channel_mask: "[ENGINEERING] master §9 -- shared with B and B'"
