@@ -1,0 +1,52 @@
+# Structured pruning protocol (master §9) -- the study's new contribution.
+#
+# FROZEN protocol: train A -> prune ONCE per ratio -> save the kept-channel mask + hash ->
+# B, B' and C all LOAD THE SAME MASK and never re-prune -> prune BatchNorm with its Conv ->
+# recalibrate BatchNorm -> fine-tune.
+#
+# The mask hash is what turns "B/B'/C should share an architecture" into something provable.
+
+pruning:
+  enabled: true                               # [ENGINEERING] master §9; overridden false for Vanilla/A
+  method: l1_structured                       # [ENGINEERING] master §9
+  # L1 magnitude cannot know which channels carry boundary detail -- that is the mechanism
+  # under test (master §2), NOT a limitation to fix. A boundary-aware criterion is MedCore's
+  # contribution and explicitly complementary (master §3); do not substitute one here.
+  criterion: l1_norm                          # [ENGINEERING] master §9
+  ratios: [0.5, 0.7]                          # [ENGINEERING] master §9 -- 0.5 primary, 0.7 robustness
+  primary_ratio: 0.5                          # [ENGINEERING] master §9
+  min_channels_per_layer: 8                   # [ASSUMPTION] guards against severing a layer
+  prune_output_head: false                    # [ENGINEERING] would change the class count
+  prune_batchnorm_with_conv: true             # [ENGINEERING] master §9 -- misalignment otherwise
+  tie_break: ascending_index                  # [ENGINEERING] master §10 determinism
+
+  mask:
+    dir: checkpoints/channel_masks            # [ENGINEERING]
+    write_once: true                          # [ENGINEERING] master §9
+    verify_hash_on_load: true                 # [ENGINEERING] master §9
+    # B, B' and C must all report this same hash, or the comparison is invalid.
+    require_identical_across_models: true     # [ENGINEERING] master §9
+
+  bn_recalibration:
+    enabled: true                             # [ENGINEERING] master §9
+    num_batches: 1500                         # [ASSUMPTION] master §9 says 1-2k
+    # IDENTICAL images in IDENTICAL order for B/B'/C. BatchNorm statistics are order-dependent,
+    # so a shuffled loader here would give the three models different starting points.
+    shuffle: false                            # [ENGINEERING] master §9
+    source_split: train                       # [ENGINEERING]
+    momentum: null                            # [ENGINEERING] null = cumulative averaging
+    reset_running_stats: true                 # [ENGINEERING] avoid stale pre-pruning statistics
+    record_batch_fingerprint: true            # [ENGINEERING] lets the audit prove the streams matched
+
+  complexity:
+    measure_with: thop                        # [ENGINEERING] master §9 -- MEASURED, not estimated
+    input_shape: [1, 1, 1024, 1024]           # [ASSUMPTION] A19
+    # A correctness check, not a reporting nicety: differing counts mean pruning diverged.
+    assert_identical_across_models: true      # [ENGINEERING] master §9
+    tolerance: 0                              # [ENGINEERING] must be bit-identical
+
+source_labels:
+  pruning.method: "[ENGINEERING] master §9"
+  pruning.ratios: "[ENGINEERING] master §9"
+  pruning.bn_recalibration.num_batches: "[ASSUMPTION] master §9 range 1-2k"
+  pruning.min_channels_per_layer: "[ASSUMPTION]"

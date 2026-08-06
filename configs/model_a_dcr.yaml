@@ -1,0 +1,53 @@
+# Model A -- UNCOMPRESSED U-Net + Dice + dCR. The REFERENCE (master §0b).
+#
+# Two roles: it is the upper bound the pruned models are measured against, and it is the
+# checkpoint that gets pruned to produce the shared base for B, B' and C (master §9). Model A
+# must therefore be trained and saved before any pruning happens.
+
+run:
+  name: A_dcr                                 # [ENGINEERING] master §0b
+  description: "Uncompressed U-Net, Dice + dCR (reference)"
+
+model:
+  architecture: unet                          # [PAPER-family] master §7
+  in_channels: 1                              # [ENGINEERING]
+  out_channels: 1                             # [ENGINEERING] FROZEN, master §7
+  encoder_channels: [64, 128, 256, 512]       # [ASSUMPTION] A08
+  bottleneck_channels: 1024                   # [ASSUMPTION] A08
+  decoder_channels: [512, 256, 128, 64]       # [ASSUMPTION] A08
+  bilinear_upsample: false                    # [ASSUMPTION]
+  final_activation: null                      # [ENGINEERING] FROZEN, master §7
+  batchnorm: true                             # [ENGINEERING]
+
+loss:
+  region:
+    name: dice                                # [PAPER] master §8
+    smooth: 1.0e-5                            # [PAPER] master §8
+    alpha: 1.0                                # [ENGINEERING]
+  boundary:
+    # *** SURROGATE, NOT THE PAPER'S EQUATION *** -- see A06 and src/losses/dcr.py.
+    # The paper is closed-access with no code, so the exact "curvature embedding space"
+    # formulation is unrecoverable. Every result using this is a result for "a
+    # curvature-weighted boundary loss in the spirit of dCR", not a reproduction of dCR.
+    # REPLACE THE MOMENT THE REAL EQUATION ARRIVES (Golden Rule 8), then re-run.
+    name: dcr                                 # [ASSUMPTION] A06
+    beta: 1.0                                 # [ASSUMPTION] A06
+    # band_width MUST match model_b_prime_generic.yaml or P5 is confounded (master §8).
+    band_width: 3                             # [ASSUMPTION] A06
+    curvature_weight_power: 1.0               # [ASSUMPTION] A06
+    normalise_weights: true                   # [ENGINEERING] stops curved images dominating the batch
+    # "target" keeps weights fixed; "prediction" would let the model lower its own loss by
+    # flattening boundaries -- a degenerate solution worth avoiding.
+    curvature_source: target                  # [ASSUMPTION] A06
+
+pruning:
+  enabled: false                              # [ENGINEERING] uncompressed reference
+  ratio: null                                 # [ENGINEERING]
+  # A is the source checkpoint that gets pruned once per ratio (master §9).
+  is_pruning_source: true                     # [ENGINEERING] master §9
+
+source_labels:
+  loss.boundary.name: "[ASSUMPTION] A06 -- SURROGATE, not the paper's equation"
+  loss.boundary.band_width: "[ASSUMPTION] A06 -- must equal B' band_width"
+  loss.boundary.curvature_source: "[ASSUMPTION] A06"
+  model.encoder_channels: "[ASSUMPTION] A08"

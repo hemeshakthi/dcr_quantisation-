@@ -1,0 +1,40 @@
+# Vanilla U-Net -- uncompressed, Dice only. The plain baseline (master §0b).
+#
+# Not one of the four study models; it establishes what an ordinary U-Net achieves without any
+# boundary term, so Model A's dCR contribution can be read against it.
+
+run:
+  name: vanilla                               # [ENGINEERING] master §0b
+  description: "Uncompressed U-Net, Dice loss only (baseline)"
+
+model:
+  architecture: unet                          # [PAPER-family] master §7 (Falk 2019, ref 36)
+  in_channels: 1                              # [ENGINEERING] greyscale bright-field
+  out_channels: 1                             # [ENGINEERING] FROZEN -- binary, master §7
+  # Master §7 writes the encoder as [64,128,256,512,1024]; the trailing 1024 is the bottleneck,
+  # which is why the decoder is [512,256,128,64]. Four poolings => inputs divisible by 16.
+  encoder_channels: [64, 128, 256, 512]       # [ASSUMPTION] A08 -- standard U-Net widths
+  bottleneck_channels: 1024                   # [ASSUMPTION] A08
+  decoder_channels: [512, 256, 128, 64]       # [ASSUMPTION] A08
+  bilinear_upsample: false                    # [ASSUMPTION] ConvTranspose2d
+  final_activation: null                      # [ENGINEERING] FROZEN -- raw logits, master §7
+  batchnorm: true                             # [ENGINEERING] required by the §9 prune/recalibrate protocol
+
+loss:
+  region:
+    name: dice                                # [PAPER] master §8
+    smooth: 1.0e-5                            # [PAPER] master §8
+    alpha: 1.0                                # [ENGINEERING]
+  boundary:
+    name: null                                # [ENGINEERING] no boundary term -- that is the point
+    beta: 0.0                                 # [ENGINEERING]
+
+pruning:
+  enabled: false                              # [ENGINEERING] uncompressed
+  ratio: null                                 # [ENGINEERING]
+
+source_labels:
+  model.encoder_channels: "[ASSUMPTION] A08"
+  model.final_activation: "[ENGINEERING] master §7 -- FROZEN"
+  loss.region.name: "[PAPER] master §8"
+  pruning.enabled: "[ENGINEERING] master §0b"

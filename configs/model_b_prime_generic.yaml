@@ -1,0 +1,65 @@
+# Model B' -- PRUNED U-Net + Dice + GENERIC boundary loss. The CONTROL (master §0b).
+#
+# B' exists to answer one question: is any recovery specific to CURVATURE, or would any
+# boundary-aware loss do just as well? That is prediction P5, and it is the study's strongest
+# claim -- so B' must be identical to C in every respect except the weighting of the boundary
+# band.
+#
+# Two invariants make that comparison honest, and both are easy to break silently:
+#   1. band_width MUST equal Model C's. Both losses call the SAME extract_boundary_band()
+#      (master §8), so an unequal width would change the band geometry, not just the weighting.
+#   2. beta MUST be gradient-calibrated against C's dCR term, NOT copied. The flat and
+#      curvature-weighted terms do not naturally produce equal gradient magnitudes, so an
+#      equal numeric beta would leave B' and C differing in HOW HARD the boundary term pulls as
+#      well as WHERE -- and a C-over-B' win could be nothing more than a larger effective
+#      boundary weight.
+
+run:
+  name: B_prime_generic                       # [ENGINEERING] master §0b
+  description: "Pruned U-Net, Dice + generic boundary loss (curvature-specificity control)"
+
+model:
+  architecture: unet                          # [PAPER-family] master §7
+  in_channels: 1                              # [ENGINEERING]
+  out_channels: 1                             # [ENGINEERING] FROZEN, master §7
+  encoder_channels: [64, 128, 256, 512]       # [ASSUMPTION] A08
+  bottleneck_channels: 1024                   # [ASSUMPTION] A08
+  decoder_channels: [512, 256, 128, 64]       # [ASSUMPTION] A08
+  bilinear_upsample: false                    # [ASSUMPTION]
+  final_activation: null                      # [ENGINEERING] FROZEN, master §7
+  batchnorm: true                             # [ENGINEERING]
+
+loss:
+  region:
+    name: dice                                # [PAPER] master §8
+    smooth: 1.0e-5                            # [PAPER] master §8
+    alpha: 1.0                                # [ENGINEERING] identical to B/C
+  boundary:
+    # From the boundary-loss family the paper itself cites (Kervadec ref 15 and relatives).
+    name: generic_boundary                    # [LITERATURE] master §8
+    # MUST equal model_c_pruned_dcr.yaml's band_width. Shared extraction, master §8.
+    band_width: 3                             # [ASSUMPTION] A06 -- must equal C
+    # null => computed by calibrate_beta_by_gradient_norm() against C's dCR term at equal
+    # alpha, ONCE, on the shared pruned base, then written into the experiment log. Never
+    # hand-set, never re-estimated mid-training.
+    beta: null                                # [ENGINEERING] master §8
+    calibrate_beta_by_gradient_norm: true     # [ENGINEERING] master §8
+    calibration_reference: configs/model_c_pruned_dcr.yaml   # [ENGINEERING] master §8
+    calibration_batches: 32                   # [ASSUMPTION] fixed batch list, same for both losses
+
+pruning:
+  enabled: true                               # [ENGINEERING] master §9
+  ratio: 0.5                                  # [ENGINEERING] master §9
+  source_checkpoint: checkpoints/A_dcr/best.pt              # [ENGINEERING] master §9
+  channel_mask: checkpoints/channel_masks/ratio_0.5.json    # [ENGINEERING] SAME mask as B and C
+  reprune: false                              # [ENGINEERING] master §9
+  recalibrate_batchnorm: true                 # [ENGINEERING] master §9
+
+finetune:
+  from_pruned_base: true                      # [ENGINEERING] master §9
+
+source_labels:
+  loss.boundary.name: "[LITERATURE] master §8 -- Kervadec-family band loss"
+  loss.boundary.band_width: "[ASSUMPTION] A06 -- MUST equal Model C"
+  loss.boundary.beta: "[ENGINEERING] master §8 -- gradient-norm calibrated, not hand-set"
+  pruning.channel_mask: "[ENGINEERING] master §9 -- shared with B and C"

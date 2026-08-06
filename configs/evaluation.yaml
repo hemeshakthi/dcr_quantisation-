@@ -1,0 +1,111 @@
+# Evaluation, metrics, failure taxonomy and statistics.
+#
+# Failure-detector thresholds are LOCKED HERE BEFORE INSPECTION (master §12). Tuning one after
+# seeing which model it favours would manufacture the P6 result.
+
+metrics:
+  # The three FROZEN metrics (master §6). No clDice, no Betti, no IoU-as-separate.
+  dice:
+    enabled: true                             # [PAPER] master §6
+    smooth: 1.0e-5                            # [PAPER] master §8
+  boundary_f1:
+    enabled: true                             # [LITERATURE] master §6
+    # At 1024x1024 the measured median cell radius is ~10 px, so 2 px is ~20% of a radius and
+    # 5 px ~50%. A19 rejected 512 px precisely because 5 px would have equalled a whole radius.
+    tolerances_px: [2.0, 5.0]                 # [LITERATURE] master §6
+  hd95:
+    enabled: true                             # [LITERATURE] master §6
+    percentile: 95                            # [LITERATURE] master §6
+    boundary_extraction: morphological_gradient  # [ENGINEERING] master §6, shared with boundary_f1
+    integer_coordinates: true                 # [ENGINEERING] master §6
+
+postprocessing:
+  # [ASSUMPTION] A07 -- unrecoverable from the paper. Whatever it is, it is IDENTICAL for all
+  # five models; an unevenly applied step would be indistinguishable from a real effect.
+  threshold: 0.5                              # [ASSUMPTION] A07
+  morphological_cleanup: false                # [ASSUMPTION] A07
+  min_object_size_px: 0                       # [ASSUMPTION] A07
+  fill_holes: false                           # [ASSUMPTION] A07
+
+failure_detectors:
+  # Thresholds locked before any model output is inspected (master §12).
+  enabled: true                               # [ENGINEERING] master §12
+  corner_collapse:
+    curvature_percentile: 90.0                # [ENGINEERING] mirrors §11's statistic
+    min_drop: 0.30                            # [ASSUMPTION] master §12
+  boundary_smoothing:
+    min_perimeter_ratio: 0.90                 # [ASSUMPTION] master §12
+  cell_merging:
+    iou_threshold: 0.5                        # [ASSUMPTION] master §12
+    requires_instances: true                  # [ENGINEERING] invisible in binary masks
+  cell_splitting:
+    iou_threshold: 0.5                        # [ASSUMPTION] master §12
+    requires_instances: true                  # [ENGINEERING]
+  thin_structure_loss:
+    max_width_px: 3.0                         # [ASSUMPTION] master §12
+  curvature_flattening:
+    percentile: 90.0                          # [ENGINEERING] mirrors §11
+    min_drop: 0.15                            # [ASSUMPTION] master §12
+    # Master §12 allows merging this with corner_collapse if they prove redundant, PROVIDED
+    # the merge is documented. Redundancy is an empirical question, settled on real outputs.
+    merge_with_corner_collapse_if_redundant: false   # [ENGINEERING] master §12
+
+  # Declared BEFORE results exist, so the P6 ratio cannot be reverse-engineered from them.
+  curvature_related: [corner_collapse, boundary_smoothing, curvature_flattening]      # [ENGINEERING]
+  non_curvature_related: [cell_merging, cell_splitting, thin_structure_loss]          # [ENGINEERING]
+
+statistics:
+  primary_test: wilcoxon_signed_rank          # [ENGINEERING] master §6 -- small non-normal samples
+  secondary_test: paired_t_test               # [PAPER] master §6 -- the paper's own test (ref 40)
+  alpha: 0.05                                 # [ENGINEERING]
+  correction: holm_bonferroni                 # [ENGINEERING] master §6
+
+  # A29: mid bin excluded from the corrected family (test n=12, power 0.337 at d=0.5).
+  # Including descriptive-only tests would dilute correction on the tests that carry claims.
+  confirmatory_bins: [low, high]              # [ENGINEERING] A29
+  descriptive_only_bins: [mid]                # [ENGINEERING] A29
+  confirmatory_family_size: 16                # [ENGINEERING] A29 -- 2 comparisons x 2 bins x 2 ratios x 2 metrics
+  original_family_size: 24                    # [ENGINEERING] master §6, retained for the record
+
+  # Dice is tested for EQUIVALENCE, not superiority: a failed superiority test cannot show
+  # that Dice is preserved (P1).
+  tost:
+    enabled: true                             # [ENGINEERING] master §6
+    metric: dice                              # [ENGINEERING] master §4
+    margin: 0.02                              # [ENGINEERING] master §4
+
+  effect_size: rank_biserial                  # [ENGINEERING] master §6
+  bootstrap:
+    enabled: true                             # [ENGINEERING] master §6
+    n_boot: 10000                             # [ASSUMPTION]
+    seed: 42                                  # [ASSUMPTION] A15
+  partial_correlation:
+    enabled: true                             # [ENGINEERING] master §6
+    x: curvature_score                        # [ENGINEERING]
+    y: boundary_error                         # [ENGINEERING]
+    covariates: [cell_size, contrast]         # [ENGINEERING] master §6/§11
+  power_analysis:
+    enabled: true                             # [PAPER] master §6 (Cohen, ref 42)
+    test_bin_n: {low: 50, mid: 12, high: 36}  # [ENGINEERING] MEASURED in Phase 2
+
+success_criteria:
+  # Master §4, locked before training. Not tunable after results exist.
+  bin: high                                   # [ENGINEERING] master §4
+  ratio: 0.5                                  # [ENGINEERING] master §4
+  boundary_f1_min_gain: 0.04                  # [ENGINEERING] master §4
+  hd95_min_relative_reduction: 0.10           # [ENGINEERING] master §4
+  dice_equivalence_margin: 0.02               # [ENGINEERING] master §4
+  visual_gate_min_restored: 6                 # [ENGINEERING] master §4/§13
+  visual_gate_panels: 10                      # [ENGINEERING] master §13
+
+identical_output_check:
+  # Golden Rule 2: two identical model outputs is a BUG. A previous attempt failed this way.
+  enabled: true                               # [ENGINEERING] master §0b/§14
+  atol: 0.0                                   # [ENGINEERING] byte-identical
+  compare_pre_threshold: true                 # [ENGINEERING] logits coincide far less by chance
+
+source_labels:
+  metrics.boundary_f1.tolerances_px: "[LITERATURE] master §6"
+  postprocessing.threshold: "[ASSUMPTION] A07"
+  statistics.confirmatory_family_size: "[ENGINEERING] A29"
+  failure_detectors.corner_collapse.min_drop: "[ASSUMPTION] master §12"
