@@ -608,6 +608,35 @@ full-corpus value. See the CV note in the verification report — the σ=2 CV is
 - Expected reproducibility impact: LOW directionally, MEDIUM on absolute values. **Verify on the
   first Kaggle run before committing to all 24 runs.**
 
+### A29 — Confirmatory test family reduced 24 → 16 (mid bin descriptive-only) [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-06** (authorised, pre-training). Recorded because it is a
+  deviation from master §6's stated "~24 tests".
+- What forced it: Phase 2 measured the test-bin occupancy as low=50, **mid=12**, high=36. Bins are
+  corpus-wide tertiles (A26) while the split is group-atomic and leakage-driven (A11/A17); the two
+  were necessarily determined independently, so bin membership and split membership were never
+  jointly optimised. The mid bin's n=12 is therefore underpowered **by construction** and cannot be
+  fixed without breaking the leakage guarantee — which is not on the table.
+- Measured power at n=12 (`docs/power_analysis.py`): 0.337 at d=0.5 and 0.689 at d=0.8 (α=0.05);
+  0.056 at d=0.5 under the Holm worst-case α. Its 80%-power MDE is d ≥ 0.914, i.e. it can only
+  detect effects larger than "large". Detecting a medium effect needs n ≥ 35.
+- Final decision: mid-bin Wilcoxon results are **descriptive-only** — computed and reported with
+  power stated inline, but never used to support or refute P1–P6, and **excluded from the
+  Holm–Bonferroni confirmatory family**. Family size recounted:
+  - original: 2 comparisons × 3 bins × 2 ratios × 2 boundary metrics = **24** (reproduces master §6)
+  - corrected: 2 comparisons × **2 bins** × 2 ratios × 2 metrics = **16**
+- Scientific justification: Holm controls the family-wise error rate across tests that carry
+  confirmatory claims. Including tests that are declared incapable of supporting or refuting a
+  hypothesis would dilute correction strength on the tests that matter, without protecting any
+  real claim — so excluding them is the correct application of the procedure, not a relaxation of
+  it. The exclusion is declared **before** any model is trained or any p-value exists, which is
+  what distinguishes it from post-hoc family trimming. P2/P4/P5 were always framed on the
+  high-curvature bin, so no hypothesis is narrowed retroactively.
+- Effect of the correction: most stringent threshold α/24 = 0.002083 → α/16 = 0.003125 (1.50×);
+  power at d=0.5 in the high bin 0.362 → 0.415; 80%-power MDE there d ≥ 0.720 → d ≥ 0.693.
+- Expected reproducibility impact: LOW on estimates, MEDIUM on inference — it changes which
+  comparisons are corrected and must be stated explicitly in the paper's statistics section.
+- Recorded in: `docs/success_criteria.md` ("Statistical scope" + "Confirmatory test family").
+
 ---
 
 ## Open questions requiring professor input (cross-ref docs/source_review.md §5)
