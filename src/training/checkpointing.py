@@ -23,10 +23,16 @@ import torch
 
 
 def checkpoint_hash(path: str | Path) -> str:
-    """SHA-256 of a checkpoint file, for provenance in metric rows and the UI (master §14)."""
+    """SHA-256 of a checkpoint file, for provenance in metric rows and the UI (master §14).
+
+    Reads in 256 KiB chunks rather than 1 MiB: this host's Windows commit limit equals physical
+    RAM (A18), and a 1 MiB read buffer has been observed to raise MemoryError under pressure
+    from other running applications. Kaggle has no such constraint; the smaller chunk size costs
+    nothing there.
+    """
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
+        for chunk in iter(lambda: f.read(1 << 18), b""):
             h.update(chunk)
     return h.hexdigest()
 

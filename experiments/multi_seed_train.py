@@ -104,9 +104,13 @@ def main(argv: list[str] | None = None) -> int:
           ('cudnn_deterministic', 'cudnn_benchmark', 'use_deterministic_algorithms')})}")
 
     from src.datasets.dataset import build_dataloaders
-    train_loader, val_loader = build_dataloaders(cfg, seeds.augmentation_seed,
-                                                 seeds.data_order_seed)
+    train_loader, val_loader, train_eval_loader = build_dataloaders(
+        cfg, seeds.augmentation_seed, seeds.data_order_seed)
     print(f"  train/val images  : {len(train_loader.dataset)} / {len(val_loader.dataset)}")
+    if train_eval_loader is not None:
+        print(f"  train-eval subsample (overfit monitor): "
+              f"{len(train_eval_loader.dataset)} images, "
+              f"gap threshold {cfg['training'].get('overfit_gap_threshold')}")
 
     model = UNet.from_config(cfg, init_seed=seeds.model_init_seed)
     loss_fn = build_loss_from_config(cfg)
@@ -116,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
                       device=args.device, output_root=args.output_root,
                       config_fingerprint=fp,
                       channel_mask_hash=args.channel_mask_hash,
-                      resume_from=args.resume_from)
+                      resume_from=args.resume_from,
+                      train_eval_loader=train_eval_loader)
     summary = trainer.fit()
 
     record = build_run_record(run_id, cfg, summary, config_fingerprint=fp,
@@ -128,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n  best {summary['best_metric_name']} = {summary['best_metric_value']} "
           f"at epoch {summary['best_epoch']}")
     print(f"  status: {summary['status']}   duration: {summary['duration_minutes']} min")
+    if summary.get("notes"):
+        print(f"  {summary['notes']}")
     print(f"  experiment_log row -> {log_path}")
     return 0
 

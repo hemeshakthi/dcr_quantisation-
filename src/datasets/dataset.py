@@ -134,8 +134,18 @@ def collate_batch(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_dataloaders(cfg: dict[str, Any], augmentation_seed: int,
-                      data_order_seed: int) -> tuple[DataLoader, DataLoader]:
-    """Build the (train, val) loaders for a run from a composed config."""
+                      data_order_seed: int
+                      ) -> tuple[DataLoader, DataLoader, DataLoader | None]:
+    """Build the (train, val, train_eval) loaders for a run from a composed config.
+
+    `train_eval` is a FIXED, unaugmented, deterministic subsample of the training set, used
+    only to monitor the train/val Boundary F1 gap each epoch (Phase 6-RUN; the training corpus
+    here is small, ~170 images, so overfitting risk is a real concern to watch, not a
+    formality). It is None when `training.track_train_val_gap` is disabled. Selection is
+    `head(N)` after sorting by image_id -- deterministic and stable across epochs and seeds, so
+    the SAME subsample is compared epoch to epoch; a re-sampled subset each epoch would make the
+    gap trend noisy for reasons unrelated to overfitting.
+    """
     data = cfg.get("data", {})
     man = pd.read_csv(data.get("preprocess_manifest", MANIFEST))
     train_all = man[man["split"] == "train"]
@@ -155,10 +165,9 @@ def build_dataloaders(cfg: dict[str, Any], augmentation_seed: int,
                   if k in AugmentationConfig.__dataclass_fields__}
         augmenter = Augmenter(seed=augmentation_seed, config=AugmentationConfig(**fields))
 
-    tr_ds = CellSegmentationDataset(tr_df, augmenter,
-                                    bool(data.get("return_instances", True)))
-    va_ds = CellSegmentationDataset(val_df, None,
-                                    bool(data.get("return_instances", True)))
+    return_instances = bool(data.get("return_instances", True))
+    tr_ds = CellSegmentationDataset(tr_df, augmenter, return_instances)
+    va_ds = CellSegmentationDataset(val_df, None, return_instances)
 
     bs = int(cfg.get("training", {}).get("batch_size", 4))
     nw = int(data.get("num_workers", 0))
@@ -170,4 +179,13 @@ def build_dataloaders(cfg: dict[str, Any], augmentation_seed: int,
     train_loader = DataLoader(tr_ds, batch_size=bs, shuffle=True,
                               generator=make_generator(data_order_seed), **common)
     val_loader = DataLoader(va_ds, batch_size=bs, shuffle=False, **common)
-    return train_loader, val_loader
+
+    train_eval_loader = None
+    tr_cfg = cfg.get("training", {})
+    if bool(tr_cfg.get("track_train_val_gap", False)) and len(tr_df):
+        n_sub = min(int(tr_cfg.get("train_metrics_subsample_size", 40)), len(tr_df))
+        sub_df = tr_df.sort_values("image_id").head(n_sub)
+        te_ds = CellSegmentationDataset(sub_df, None, return_instances)
+        train_eval_loader = DataLoader(te_ds, batch_size=bs, shuffle=False, **common)
+
+    return train_loader, val_loader, train_eval_loader

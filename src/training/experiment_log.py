@@ -142,6 +142,10 @@ def build_run_record(run_id: str,
         "curvature_proxy": boundary.get("curvature_proxy", ""),
         "curvature_smooth_sigma": boundary.get("curvature_smooth_sigma", ""),
         "config_fingerprint": config_fingerprint,
+        # --- overfit monitor (Phase 6-RUN): small (~170-image) training corpus ---
+        "train_val_gap_final": summary.get("train_val_gap_final", ""),
+        "train_val_gap_at_best_epoch": summary.get("train_val_gap_at_best_epoch", ""),
+        "overfit_gap_threshold": summary.get("overfit_gap_threshold", ""),
     }
 
 

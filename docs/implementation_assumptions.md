@@ -724,6 +724,92 @@ full-corpus value. See the CV note in the verification report — the σ=2 CV is
 - Expected reproducibility impact: LOW — identical across all five models, so it cannot
   confound the B/B′/C comparison; it only determines which epoch's weights are kept.
 
+### A32 — Train/val Boundary-F1 gap monitor: subsample size and evaluation design [ASSUMPTION]
+- Status: **RESOLVED / APPLIED 2026-08-06**, on direct operator instruction for Phase 6-RUN:
+  "Training set is small (~170 images) -- monitor train/val Boundary F1 gap every epoch; flag
+  in run notes if it exceeds 0.15 at convergence."
+- Missing info: no paper-derived guidance exists on overfitting monitoring for this study; the
+  instruction specifies *what* to watch and the flag threshold, not *how* to compute a train-side
+  metric cheaply every epoch.
+- Design: `build_dataloaders` (src/datasets/dataset.py) additionally returns a `train_eval_loader`
+  when `training.track_train_val_gap` is enabled — a FIXED, unaugmented, deterministic subsample
+  of the training set (`sort_values("image_id").head(N)`), evaluated with the same
+  `compute_all_metrics` used for validation. Deterministic and stable across epochs so the trend
+  reflects the model changing, not the subsample changing.
+- `train_metrics_subsample_size = 40` [ASSUMPTION]: large enough to average out per-image noise
+  in the Boundary F1 estimate, small enough that adding a second metrics pass every epoch does
+  not meaningfully slow training (bounded, independent of the ~170-image training set size).
+- Alternatives considered: (a) evaluate on the FULL training set every epoch — rejected, doubles
+  per-epoch cost for a monitoring signal, not a result that needs full-corpus precision;
+  (b) re-sample the subset each epoch — rejected, would make the gap trend noisy for reasons
+  unrelated to overfitting, confounding "gap is widening" with "subsample changed".
+- Scientific justification: the gap is a DIAGNOSTIC, not one of the three frozen metrics
+  (master §6) and not part of any confirmatory test — it exists solely to catch overfitting on
+  a small corpus while it is happening, not to feed P1–P6.
+- Expected reproducibility impact: NONE on the study's conclusions (diagnostic only); HIGH
+  operationally — a flagged run signals its own results should be inspected before being trusted.
+
+### A33 — Overfit-gap flagging: threshold, "at convergence" semantics, and a bug this design caught
+- Status: **RESOLVED / APPLIED 2026-08-06**, threshold given verbatim by the operator instruction
+  quoted in A32 ("exceeds 0.15 at convergence").
+- "At convergence" is read as **the last epoch actually trained** — whichever epoch ends
+  training, whether by early-stopping on plateau or by exhausting `max_epochs` — not necessarily
+  the epoch that produced the best checkpoint (tracked separately as
+  `train_val_gap_at_best_epoch`, reported alongside for context). This is the literal reading of
+  the instruction's wording and is also the more useful one operationally: it reflects the
+  model's state at the point training actually stopped.
+- `overfit_gap_threshold = 0.15` [ENGINEERING, given verbatim] applies identically to every model
+  (Vanilla/A/B/B′/C) via `training_shared.yaml`, so it cannot itself become a source of
+  between-model difference.
+- Gap sign convention: `gap = train_boundary_f1_2px − val_boundary_f1_2px` (positive = training
+  outperforming validation, the classic overfitting signature). When flagged, `notes` records the
+  exact gap value, the threshold, the epoch, and the training-set size, e.g.: *"WARNING:
+  train/val boundary_f1_2px gap 0.8500 exceeds 0.15 at convergence (epoch 0, n_train=2) --
+  possible overfitting on the small training set."* Unflagged runs leave `notes` empty, and a run
+  with tracking disabled reports `""` (not `NaN`) in the gap columns, so an empty experiment-log
+  cell is unambiguous.
+- **A real bug this design caught, unrelated to the monitoring feature itself but found while
+  building it:** `src.training.validator.validate(..., collect_rows=False)` — the mode
+  `evaluate_train_subsample` uses for efficiency — only ever appended per-image metric dicts to
+  `rows` INSIDE the `if collect_rows:` branch, so `summarise(rows)` received an empty list and
+  silently returned `{}` for the ENTIRE summary, not merely omitting per-image detail. Every gap
+  would have computed as `NaN` (a value that never exceeds any threshold), i.e. the overfit
+  monitor would have run, logged a `train_val_gap` column, and never once fired — a second
+  instance of the exact silent-degrade failure class A31 already found (a lookup that quietly
+  produces nothing rather than erring). Fixed by always accumulating metrics into a
+  `metrics_only` list regardless of `collect_rows`, and feeding THAT into `summarise()`;
+  `collect_rows` now controls only whether the returned per-image `rows` (image_id/meta) are
+  built, never whether metrics are computed. `audit/verify_phase6.py` gained a direct regression
+  check: `collect_rows=True` and `collect_rows=False` must agree on the summary.
+- Expected reproducibility impact: the bug fix has no effect on any of the three frozen metrics
+  or on model weights (validate() is read-only); it only restores a monitoring signal that would
+  otherwise have failed silently for all 24 Kaggle runs.
+
+### A34 — Kaggle environment: do not reinstall torch/torchvision over the platform build
+- Status: **RESOLVED / APPLIED 2026-08-06**, for Phase 6-RUN's notebook.
+- Missing info: master §16 pins `torch==2.1.0`/`torchvision==0.16.0`; Kaggle's GPU images ship a
+  specific torch build matched to their CUDA driver, which is very unlikely to be exactly 2.1.0.
+- Why forcing the pin is the wrong call: `pip install torch==2.1.0` on Kaggle would pull a CPU or
+  mismatched-CUDA wheel unless the exact `+cu121`-style local version is also pinned and happens
+  to match the image's driver, and getting this wrong silently downgrades training to CPU or
+  breaks CUDA entirely, for infrastructure reasons having nothing to do with the model. This is
+  precisely the class of risk Phase 6 built portability against: `requirements-kaggle.txt`'s
+  header already documents that the code targets a *behaviourally* compatible range
+  (no `verbose=` on `ReduceLROnPlateau`, no version-specific `torch.amp` path, explicit
+  `weights_only=` on `torch.load`), specifically so it tolerates whatever torch Kaggle actually
+  provides.
+- Final decision: the Kaggle notebook installs every `requirements-kaggle.txt` package EXCEPT
+  `torch` and `torchvision`, which are left as Kaggle's preinstalled, GPU-matched build. The
+  notebook prints the resolved `torch.__version__`, `torch.version.cuda`, and
+  `torch.cuda.is_available()` at startup and writes them into the run's notes, so the actual
+  environment is recorded rather than assumed to match the pin.
+- Scientific justification: master §10's invariants (identical optimiser/LR/seeds/determinism
+  across B/B′/C) do not depend on the exact torch patch version, only on internal consistency
+  across the 24 runs — which running the SAME Kaggle image for all of them already guarantees.
+- Expected reproducibility impact: LOW for the study's internal comparisons (all 24 runs share
+  one Kaggle image); MEDIUM if exact numerical reproduction on a different torch version is later
+  attempted — record the printed version alongside any such attempt.
+
 ### A29 — Confirmatory test family reduced 24 → 16 (mid bin descriptive-only) [ENGINEERING]
 - Status: **RESOLVED / APPLIED 2026-08-06** (authorised, pre-training). Recorded because it is a
   deviation from master §6's stated "~24 tests".

@@ -58,11 +58,13 @@ class Trainer:
                  config_fingerprint: str = "",
                  channel_mask_hash: str | None = None,
                  resume_from: str | Path | None = None,
-                 log_tensorboard: bool | None = None) -> None:
+                 log_tensorboard: bool | None = None,
+                 train_eval_loader: Any = None) -> None:
         self.model = model.to(device)
         self.loss_fn = loss_fn
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.train_eval_loader = train_eval_loader
         self.config = config
         self.run_id = run_id
         self.device = device
@@ -80,6 +82,15 @@ class Trainer:
         self.mixed_precision = bool(tr.get("mixed_precision", False))
         self.grad_clip = tr.get("grad_clip_norm", None)
         self.log_gradient_norms = bool(tr.get("log_gradient_norms", True))
+
+        # Overfitting monitor for the small (~170-image) training corpus (Phase 6-RUN). Runs
+        # ONLY when both the config enables it AND a train_eval_loader was actually supplied --
+        # so a caller (like the Phase 6 smoke test) that omits it simply gets no gap tracking,
+        # rather than an error.
+        self.track_train_val_gap = (bool(tr.get("track_train_val_gap", False))
+                                    and self.train_eval_loader is not None)
+        self.overfit_gap_threshold = float(tr.get("overfit_gap_threshold", 0.15))
+        self._epoch_gaps: dict[int, float] = {}
 
         self.monitor = ck.get("monitor", es.get("monitor", "val_boundary_f1_2px"))
         self.mode = ck.get("mode", "max")
@@ -205,6 +216,22 @@ class Trainer:
         return validate(self.model, self.val_loader, self.loss_fn, self.device,
                         threshold=thr, tolerances=tols)
 
+    def evaluate_train_subsample(self, epoch: int) -> dict[str, Any] | None:
+        """Metrics-only pass over the FIXED train subsample, for overfit monitoring.
+
+        Reuses the same metric functions and tolerances as `validate`, over the SAME fixed
+        subsample every epoch (see `build_dataloaders`), so the trend is comparable epoch to
+        epoch. No loss_fn is passed -- this is metrics-only, not a training step (no_grad,
+        eval() mode, no optimiser).
+        """
+        if self.train_eval_loader is None:
+            return None
+        ev = self.config.get("metrics", {})
+        tols = tuple(ev.get("boundary_f1", {}).get("tolerances_px", (2.0, 5.0)))
+        thr = float(self.config.get("postprocessing", {}).get("threshold", 0.5))
+        return validate(self.model, self.train_eval_loader, None, self.device,
+                        threshold=thr, tolerances=tols, collect_rows=False, prefix="train")
+
     # ------------------------------------------------------------------ logging
     def _write_csv_row(self, row: dict[str, Any]) -> None:
         exists = self.csv_path.exists()
@@ -264,6 +291,26 @@ class Trainer:
                    "monitor": self.monitor, "monitored_value": monitored,
                    "is_best": bool(improved),
                    **{k: v for k, v in summary.items() if isinstance(v, (int, float))}}
+
+            # Overfitting monitor (Phase 6-RUN): the training corpus here is small
+            # (~170 images), so a widening train/val Boundary F1 gap is a real risk worth
+            # watching every epoch, not just at the end.
+            gap = float("nan")
+            if self.track_train_val_gap:
+                train_eval = self.evaluate_train_subsample(epoch)
+                if train_eval is not None:
+                    t_summary = train_eval["summary"]
+                    row.update({k: v for k, v in t_summary.items()
+                               if isinstance(v, (int, float))})
+                    train_key = (self.monitor.replace("val_", "train_", 1)
+                                if self.monitor.startswith("val_")
+                                else f"train_{self.monitor}")
+                    train_val = t_summary.get(train_key, float("nan"))
+                    if train_val == train_val and monitored == monitored:  # both finite
+                        gap = train_val - monitored
+                    row["train_val_gap"] = gap
+                    self._epoch_gaps[epoch] = gap
+
             self._write_csv_row(row)
             self._log_tb(row, epoch)
             last = {"train": tr, "val": summary, "epoch": epoch}
@@ -295,8 +342,31 @@ class Trainer:
 
         dur = (time.time() - start) / 60.0
         boundary = (self.config.get("loss", {}) or {}).get("boundary", {}) or {}
+
+        # "At convergence" is read as the LAST epoch actually trained -- whichever caused
+        # training to stop, whether early-stopped on plateau or exhausting max_epochs -- since
+        # that is the point the instruction's phrasing refers to, not necessarily the epoch that
+        # produced the best checkpoint (best_epoch is tracked separately and reported too).
+        final_epoch = last.get("epoch", self.start_epoch - 1)
+        gap_final = self._epoch_gaps.get(final_epoch, float("nan"))
+        gap_at_best = (self._epoch_gaps.get(self.tracker.best_epoch, float("nan"))
+                      if self.tracker.best_epoch is not None else float("nan"))
+        notes = ""
+        if self.track_train_val_gap and gap_final == gap_final and gap_final > self.overfit_gap_threshold:
+            n_train = len(self.train_loader.dataset) if hasattr(self.train_loader, "dataset") else "?"
+            notes = (f"WARNING: train/val {self.monitor.replace('val_', '')} gap "
+                    f"{gap_final:.4f} exceeds {self.overfit_gap_threshold} at convergence "
+                    f"(epoch {final_epoch}, n_train={n_train}) -- possible overfitting on "
+                    f"the small training set.")
+
         return {
             "run_id": self.run_id,
+            # "" (not NaN) when tracking is disabled, matching overfit_gap_threshold's pattern
+            # below -- keeps the CSV free of literal "nan" text for runs that never track it.
+            "train_val_gap_final": gap_final if self.track_train_val_gap else "",
+            "train_val_gap_at_best_epoch": gap_at_best if self.track_train_val_gap else "",
+            "overfit_gap_threshold": self.overfit_gap_threshold if self.track_train_val_gap else "",
+            "notes": notes,
             "epochs_trained": (last.get("epoch", self.start_epoch - 1) + 1) - self.start_epoch,
             "stopping_epoch": stopping_epoch if stopping_epoch is not None else "",
             "best_epoch": self.tracker.best_epoch,

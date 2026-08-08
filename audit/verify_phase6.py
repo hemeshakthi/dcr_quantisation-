@@ -269,6 +269,109 @@ print(f"       max |straight-through - resumed| weight diff = {maxdiff:.3e}")
 check(f"RESUME IDENTICAL: 2+2 epochs == 4 epochs straight through (maxdiff={maxdiff:.2e})",
       maxdiff < 1e-6)
 
+# ---- 5b. train/val Boundary-F1 gap monitoring (Phase 6-RUN instruction) -----------
+# Training set is small (~170 images after the val carve-out); the professor/operator
+# instruction was to watch the train/val Boundary F1 gap every epoch and flag it in run notes
+# if it exceeds 0.15 "at convergence". Two things are checked: (a) real wiring -- a
+# train_eval_loader actually produces train_* columns and gap fields through a genuine
+# training run; (b) the flagging ARITHMETIC and MESSAGE, forced deterministically by
+# monkeypatching the two evaluation calls, since a toy 4-image run cannot reliably reproduce a
+# real generalisation gap on demand.
+print("\n       --- train/val Boundary F1 gap monitoring ---")
+
+
+def gap_cfg(max_epochs=1, threshold=0.15):
+    cfg = tiny_cfg(max_epochs)
+    cfg["training"]["track_train_val_gap"] = True
+    cfg["training"]["overfit_gap_threshold"] = threshold
+    return cfg
+
+
+# Regression guard for the bug this section's development just found: collect_rows=False must
+# still produce a REAL summary, not an empty one from summarise([]).
+res_norows = validate(tiny_model(10), loader, device="cpu", collect_rows=False)
+check("collect_rows=False still returns a non-empty summary (not summarise([]))",
+      bool(res_norows["summary"]) and "val_boundary_f1_2px" in res_norows["summary"])
+check("collect_rows=False returns an EMPTY rows list (that part is still skipped)",
+      res_norows["rows"] == [])
+res_rows = validate(tiny_model(10), loader, device="cpu", collect_rows=True)
+check("collect_rows=True and collect_rows=False AGREE on the summary "
+      "(collect_rows must never change the computed values, only row detail)",
+      abs(res_norows["summary"]["val_boundary_f1_2px"]
+          - res_rows["summary"]["val_boundary_f1_2px"]) < 1e-9)
+
+# (a) wiring: a real short run with a genuine (if tiny) train_eval_loader
+train_eval_loader = TinyLoader(items[:2], batch_size=2)
+cfg_wire = gap_cfg(max_epochs=2)
+t_wire = Trainer(model=tiny_model(11), loss_fn=build_loss_from_config(cfg_wire),
+                 train_loader=loader, val_loader=loader, config=cfg_wire,
+                 run_id="gap_wiring", device="cpu", output_root=tmp,
+                 config_fingerprint="wiring", train_eval_loader=train_eval_loader,
+                 log_tensorboard=False)
+check("Trainer.track_train_val_gap is True when config enables it AND a loader is supplied",
+      t_wire.track_train_val_gap is True)
+summary_wire = t_wire.fit()
+wire_rows = list(csv.DictReader(Path(summary_wire["csv_log"]).open(newline="", encoding="utf-8")))
+check("epochs.csv carries a train_val_gap column when tracking is enabled",
+      all("train_val_gap" in r for r in wire_rows))
+check("epochs.csv carries at least one train_* metric column (from the train subsample)",
+      any(k.startswith("train_boundary_f1") for k in wire_rows[0]))
+check("run summary carries train_val_gap_final/at_best_epoch/overfit_gap_threshold keys",
+      {"train_val_gap_final", "train_val_gap_at_best_epoch", "overfit_gap_threshold"}
+      <= set(summary_wire))
+check("overfit_gap_threshold in the summary matches the config (0.15)",
+      float(summary_wire["overfit_gap_threshold"]) == 0.15)
+
+# (b) a run WITHOUT a train_eval_loader must not track the gap, and must report "" not NaN
+t_notrack = Trainer(model=tiny_model(11), loss_fn=build_loss_from_config(tiny_cfg(1)),
+                    train_loader=loader, val_loader=loader, config=tiny_cfg(1),
+                    run_id="gap_notrack", device="cpu", output_root=tmp,
+                    config_fingerprint="notrack", log_tensorboard=False)
+check("no train_eval_loader -> tracking is off even though the base config enables it "
+      "elsewhere", t_notrack.track_train_val_gap is False)
+summary_notrack = t_notrack.fit()
+check("gap fields report '' (not NaN) when tracking never ran",
+      summary_notrack["train_val_gap_final"] == ""
+      and summary_notrack["overfit_gap_threshold"] == "")
+
+# (c) deterministic flagging: force a LARGE gap and confirm the WARNING fires
+cfg_big = gap_cfg(max_epochs=1, threshold=0.15)
+t_big = Trainer(model=tiny_model(12), loss_fn=build_loss_from_config(cfg_big),
+                train_loader=loader, val_loader=loader, config=cfg_big,
+                run_id="gap_big", device="cpu", output_root=tmp,
+                config_fingerprint="big", train_eval_loader=train_eval_loader,
+                log_tensorboard=False)
+t_big.evaluate_train_subsample = lambda epoch: {
+    "summary": {"train_boundary_f1_2px": 0.95}, "rows": []}
+t_big.validate = lambda epoch: {
+    "summary": {"val_boundary_f1_2px": 0.10, "val_loss": 0.5}, "rows": []}
+summary_big = t_big.fit()
+print(f"       forced-gap case: gap={summary_big['train_val_gap_final']:.4f}  "
+      f"notes={summary_big['notes']!r}")
+check("a forced 0.85 gap (0.95 train vs 0.10 val) is computed correctly",
+      abs(float(summary_big["train_val_gap_final"]) - 0.85) < 1e-9)
+check("a gap exceeding the threshold triggers a WARNING in run notes",
+      "WARNING" in summary_big["notes"] and "overfitting" in summary_big["notes"])
+check("the warning names the actual gap value and the threshold",
+      "0.8500" in summary_big["notes"] and "0.15" in summary_big["notes"])
+
+# (d) deterministic flagging: a SMALL gap must NOT be flagged
+cfg_small = gap_cfg(max_epochs=1, threshold=0.15)
+t_small = Trainer(model=tiny_model(13), loss_fn=build_loss_from_config(cfg_small),
+                  train_loader=loader, val_loader=loader, config=cfg_small,
+                  run_id="gap_small", device="cpu", output_root=tmp,
+                  config_fingerprint="small", train_eval_loader=train_eval_loader,
+                  log_tensorboard=False)
+t_small.evaluate_train_subsample = lambda epoch: {
+    "summary": {"train_boundary_f1_2px": 0.50}, "rows": []}
+t_small.validate = lambda epoch: {
+    "summary": {"val_boundary_f1_2px": 0.48, "val_loss": 0.5}, "rows": []}
+summary_small = t_small.fit()
+check("a gap (0.02) under the threshold produces NO warning",
+      summary_small["notes"] == "")
+check("a small gap is still recorded numerically even though it wasn't flagged",
+      abs(float(summary_small["train_val_gap_final"]) - 0.02) < 1e-9)
+
 # ---- 6. checkpoint-mask guard, tracker, validator ---------------------------------
 print("\n       --- guards ---")
 try:

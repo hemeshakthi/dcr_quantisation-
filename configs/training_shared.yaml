@@ -77,6 +77,12 @@ training:
   mixed_precision: false                      # [ENGINEERING] master §10 -- OFF for final runs
   grad_clip_norm: null                        # [ASSUMPTION] none unless instability appears
   log_gradient_norms: true                    # [ENGINEERING] master §10
+  # Overfitting monitor (Phase 6-RUN, direct professor/operator instruction): the training
+  # corpus is small (~170 images after the val carve-out), so a widening train/val Boundary F1
+  # gap is watched every epoch rather than only inferred after the fact from the final numbers.
+  track_train_val_gap: true                   # [ENGINEERING] Phase 6-RUN instruction
+  train_metrics_subsample_size: 40            # [ASSUMPTION] A32 -- bounds per-epoch eval cost
+  overfit_gap_threshold: 0.15                 # [ENGINEERING] Phase 6-RUN instruction, verbatim
 
 early_stopping:
   enabled: true                               # [ENGINEERING] master §10
@@ -122,3 +128,6 @@ source_labels:
   augmentation.seed: "[ENGINEERING] master §10 -- shared across B/B'/C"
   normalization.method: "[LITERATURE] A20"
   data.image_size: "[ASSUMPTION] A19"
+  training.track_train_val_gap: "[ENGINEERING] Phase 6-RUN instruction"
+  training.train_metrics_subsample_size: "[ASSUMPTION] A32"
+  training.overfit_gap_threshold: "[ENGINEERING] Phase 6-RUN instruction, verbatim 0.15"

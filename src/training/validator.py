@@ -27,7 +27,8 @@ def validate(model: torch.nn.Module,
              threshold: float = 0.5,
              tolerances: tuple[float, ...] = (2.0, 5.0),
              percentile: float = 95.0,
-             collect_rows: bool = True) -> dict[str, Any]:
+             collect_rows: bool = True,
+             prefix: str = "val") -> dict[str, Any]:
     """Evaluate `model` over `loader`.
 
     Returns:
@@ -36,12 +37,27 @@ def validate(model: torch.nn.Module,
     HD95 is NaN for images where either mask is empty (undefined, see metrics). The summary uses
     nanmean so those images are excluded from the average rather than poisoning it -- and the
     count of valid HD95 images is reported so a summary computed from few images is visible.
+
+    `prefix` names the summary keys ("val_boundary_f1_2px" by default). This function is also
+    used to evaluate a TRAIN subsample for overfitting monitoring (Phase 6-RUN), where the
+    caller passes prefix="train" so "train_boundary_f1_2px" and "val_boundary_f1_2px" can sit
+    side by side in the same epoch row without colliding.
+
+    `collect_rows=False` skips building the PER-IMAGE detail dicts (image_id, meta) that the
+    Wilcoxon pairing needs later -- it does NOT skip computing metrics. The two are deliberately
+    decoupled: an earlier version fed only the (conditionally built) `rows` list into
+    `summarise()`, so collect_rows=False silently produced an EMPTY summary -- every value
+    NaN -- rather than merely a smaller `rows` list. That is precisely the failure mode this
+    project treats as a bug rather than an edge case (cf. the swallowed-KeyError bug this same
+    function's monitor lookup was hardened against): a caller that only wants a summary (e.g.
+    the train/val gap monitor's train-subsample pass) must still get a REAL summary.
     """
     was_training = model.training
     model.eval()
     model.to(device)
 
     rows: list[dict[str, Any]] = []
+    metrics_only: list[dict[str, Any]] = []
     losses: list[float] = []
     try:
         for batch in loader:
@@ -59,6 +75,8 @@ def validate(model: torch.nn.Module,
 
             for i in range(preds.shape[0]):
                 m = compute_all_metrics(preds[i, 0], gts[i, 0], tolerances, percentile)
+                metrics_only.append(m)          # ALWAYS -- summary correctness never depends
+                                                 # on collect_rows
                 if collect_rows:
                     row = {"image_id": ids[i] if i < len(ids) else None}
                     meta = metas[i] if i < len(metas) else {}
@@ -72,13 +90,13 @@ def validate(model: torch.nn.Module,
         if was_training:
             model.train()
 
-    summary = summarise(rows)
+    summary = summarise(metrics_only, prefix=prefix)
     if losses:
-        summary["val_loss"] = float(np.mean(losses))
+        summary[f"{prefix}_loss"] = float(np.mean(losses))
     return {"rows": rows, "summary": summary}
 
 
-def summarise(rows: list[dict[str, Any]]) -> dict[str, float]:
+def summarise(rows: list[dict[str, Any]], prefix: str = "val") -> dict[str, float]:
     """Epoch-level means from per-image rows. NaN-aware for HD95."""
     if not rows:
         return {}
@@ -87,11 +105,11 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, float]:
     for k in keys:
         vals = np.array([r.get(k, np.nan) for r in rows], dtype=float)
         finite = np.isfinite(vals)
-        out[f"val_{k}"] = float(vals[finite].mean()) if finite.any() else float("nan")
+        out[f"{prefix}_{k}"] = float(vals[finite].mean()) if finite.any() else float("nan")
         if k == "hd95":
             # Reported so a summary averaged over only a handful of valid images is visible
             # rather than looking like a full-set result.
-            out["val_hd95_n_valid"] = float(finite.sum())
+            out[f"{prefix}_hd95_n_valid"] = float(finite.sum())
     return out
 
 
