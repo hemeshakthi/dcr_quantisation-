@@ -810,6 +810,55 @@ full-corpus value. See the CV note in the verification report — the σ=2 CV is
   one Kaggle image); MEDIUM if exact numerical reproduction on a different torch version is later
   attempted — record the printed version alongside any such attempt.
 
+### A35 — Which checkpoint (seed, ratio) each UI model column shows [ENGINEERING/ASSUMPTION]
+- Status: **RESOLVED / APPLIED 2026-08-09**, for the frontend/API contract phase.
+- Missing info: master §14 fixes WHICH five models the UI shows ("Vanilla, A, B, B′, C at 0.5")
+  but not which of the three trained seeds represents each one, since the compression study
+  itself needs all 3 seeds (Phase 8's statistics) while a live demo UI can only show one
+  instance per model at a time.
+- Alternatives considered: (a) let the user pick a seed via a second dropdown — rejected as
+  scope creep on a UI whose job is to show ONE clear comparison, and master §14's UX spec has no
+  second seed selector; (b) show the seed with the median best-metric value — rejected, adds a
+  data-dependent selection step that would need to be recomputed and re-justified any time
+  results change, for no real benefit over a fixed convention; (c) fixed seed 1 for every model
+  — adopted.
+- Final decision: every model column loads `checkpoints/<run_name>_seed1/best.pt` (seed 1,
+  `best.pt` rather than `final.pt` since checkpoint selection is on val Boundary F1, A31 — the
+  metric this UI exists to foreground). `run_name` is each config's `run.name`
+  (`vanilla`/`A_dcr`/`B_pruned`/`B_prime_generic`/`C_pruned_dcr`), and ratio is fixed at 0.5 for
+  B/B′/C per master §14's own text, matching `docs/api_contract.md` §0/A35.
+- Scientific justification: this is explicitly a single illustrative instance for a live demo,
+  not a statistical claim — the confirmatory numbers (Phase 8+) properly aggregate all 3 seeds
+  with paired Wilcoxon tests. The UI's own "story" text says as much on every image
+  (`app.js::computeStory`'s closing sentence), so a viewer cannot mistake the live demo for the
+  study's result.
+- Expected reproducibility impact: NONE on any confirmatory result (UI-only, seed 1 is not
+  privileged in the actual statistics). If seed 1 happens to be an unusually strong or weak run
+  for some model, the demo would look more or less dramatic than the true effect — a risk
+  inherent to showing any single instance, mitigated by the disclaimer rather than eliminated.
+
+### A36 — Collapse-banner colour: FROZEN black-and-white wins over a literal "red" instruction
+- Status: **RESOLVED / APPLIED 2026-08-09**.
+- The conflict: the phase instruction that requested this UI said "red ... 'MODEL COLLAPSE
+  DETECTED' banner", but master §14 freezes the ENTIRE UI as black-and-white only ("the paper and
+  the prototype must read correctly in greyscale print and for colour-blind readers" —
+  `src/visualization/contours.py`'s own header), and the SAME instruction's own verification step
+  requires "no color in CSS". A literal red banner would fail the instruction's own stated
+  verification.
+- Final decision: master §14 (a locked, explicitly-justified design constraint) and the
+  instruction's own verification requirement both point the same way, so black-and-white wins.
+  Urgency is conveyed instead by colour-free means: full inversion (black background, white
+  text), a pulsing border animation, oversized bold type, and a `⚠` warning glyph — see the
+  comment block at the top of `frontend/style.css`.
+- Scientific/practical justification: none of the alternatives to colour weaken the alert's
+  visibility — inversion plus animation is at least as attention-grabbing as a colour change, and
+  it additionally keeps the collapse banner legible for colour-blind readers and in greyscale
+  print, which is the exact rationale master §14 already gives for the black-and-white
+  requirement.
+- Expected reproducibility impact: NONE — this is a presentation choice with no effect on any
+  measured result. Logged because it is a direct, documented resolution of two conflicting
+  instructions, not a silent deviation from either.
+
 ### A29 — Confirmatory test family reduced 24 → 16 (mid bin descriptive-only) [ENGINEERING]
 - Status: **RESOLVED / APPLIED 2026-08-06** (authorised, pre-training). Recorded because it is a
   deviation from master §6's stated "~24 tests".

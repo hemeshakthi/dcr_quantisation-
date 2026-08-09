@@ -1,0 +1,322 @@
+/* dCR Compression Study — live comparison UI.
+ *
+ * BLACK AND WHITE ONLY (master §14, FROZEN). Every custom property below is a shade of grey;
+ * audit/verify_frontend.py parses every hex/rgb literal in this file and asserts R==G==B.
+ *
+ * Models are distinguished by LINE STYLE (stroke-dasharray, set in app.js from
+ * src/visualization/contours.py's LINE_STYLES), never by hue. Error maps are distinguished by
+ * FILL PATTERN (solid vs hatched), never by hue.
+ *
+ * NOTE on the collapse banner: the task that requested this UI asked for a "red" banner, but
+ * master §14 freezes the whole UI as black-and-white ("the paper and the prototype must read
+ * correctly in greyscale print and for colour-blind readers") and this same task's own
+ * verification step requires "no color in CSS". Those two instructions conflict; the FROZEN
+ * spec and the stated verification win. Urgency is conveyed instead by INVERSION (black-on-white
+ * flips to white-on-black), oversized bold type, a pulsing border, and an ASCII warning glyph --
+ * not by colour. See frontend/README.md.
+ */
+
+:root {
+  --bg: #ffffff;
+  --fg: #000000;
+  --gray-1: #f4f4f4;
+  --gray-2: #e2e2e2;
+  --gray-3: #b5b5b5;
+  --gray-4: #7a7a7a;
+  --gray-5: #2b2b2b;
+  --border: var(--fg);
+  --focus: #000000;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --fg: #ffffff;
+    --gray-1: #1a1a1a;
+    --gray-2: #2b2b2b;
+    --gray-3: #4a4a4a;
+    --gray-4: #8a8a8a;
+    --gray-5: #d4d4d4;
+    --border: var(--fg);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+body {
+  padding: 1.5rem 2rem 4rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+header h1 {
+  font-size: 1.4rem;
+  margin-bottom: 0.2rem;
+  border-bottom: 3px solid var(--border);
+  padding-bottom: 0.5rem;
+}
+
+.subtitle {
+  color: var(--gray-4);
+  font-size: 0.85rem;
+  margin-top: 0.4rem;
+}
+
+/* ---------------- alert banners (no colour -- see file header) ---------------- */
+
+.collapse-banner {
+  background: var(--fg);
+  color: var(--bg);
+  border: 4px solid var(--fg);
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  animation: pulse-border 1.1s ease-in-out infinite;
+}
+
+.collapse-banner::before {
+  content: "\26A0 ";  /* U+26A0 WARNING SIGN -- glyph, not colour */
+  font-size: 1.2em;
+}
+
+@keyframes pulse-border {
+  0%, 100% { box-shadow: 0 0 0 0 var(--fg) inset; }
+  50%      { box-shadow: 0 0 0 4px var(--bg) inset; }
+}
+
+.connection-error {
+  background: var(--gray-1);
+  border: 2px dashed var(--fg);
+  padding: 0.9rem 1.1rem;
+  margin: 1rem 0;
+  font-weight: 600;
+}
+
+[hidden] { display: none !important; }
+
+/* ---------------- controls ---------------- */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--gray-1);
+  border: 1px solid var(--border);
+}
+
+.controls label { font-weight: 600; }
+
+#image-select {
+  font-size: 0.95rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+}
+
+.image-meta {
+  color: var(--gray-4);
+  font-size: 0.85rem;
+}
+
+/* ---------------- reference panels (original / GT) ---------------- */
+
+.reference-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+figure.panel {
+  margin: 0;
+  border: 1px solid var(--border);
+  background: var(--gray-1);
+}
+
+figure.panel figcaption {
+  padding: 0.4rem 0.6rem;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---------------- image + overlay stack ---------------- */
+
+.image-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: var(--gray-2);
+  overflow: hidden;
+}
+
+.image-frame img,
+.image-frame svg,
+.image-frame canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.image-frame img { object-fit: contain; }
+
+.contour-svg { pointer-events: none; }
+.contour-svg polyline {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.error-canvas { mix-blend-mode: multiply; }
+
+@media (prefers-color-scheme: dark) {
+  .error-canvas { mix-blend-mode: screen; }
+}
+
+/* ---------------- model comparison cards ---------------- */
+
+.model-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+}
+
+.model-card {
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.model-card header {
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--gray-1);
+}
+
+.model-card .model-label {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.model-card.is-reference header {
+  background: var(--gray-2);
+}
+
+.model-card.is-reference .model-label::after {
+  content: " (reference)";
+  font-weight: 400;
+  font-size: 0.75em;
+  color: var(--gray-4);
+}
+
+.model-static-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+  color: var(--gray-4);
+}
+
+.error-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.78rem;
+  border-bottom: 1px solid var(--gray-2);
+}
+
+.error-toggle label { display: flex; align-items: center; gap: 0.3rem; }
+
+/* ---------------- metrics: raw numbers + relative bars ---------------- */
+
+.metrics {
+  margin: 0;
+  padding: 0.6rem 0.7rem 0.8rem;
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px dotted var(--gray-3);
+}
+
+.metric-row:last-child { border-bottom: none; }
+
+.metric-row dt {
+  font-size: 0.8rem;
+  color: var(--gray-4);
+}
+
+.metric-row dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-value {
+  font-weight: 700;
+  font-size: 0.88rem;
+  min-width: 3.4em;
+  text-align: right;
+}
+
+.metric-bar {
+  width: 70px;
+  height: 8px;
+  background: var(--gray-2);
+  border: 1px solid var(--border);
+  position: relative;
+}
+
+/* the reference (Model A) mark: a fixed tick at the 100% line */
+.metric-bar::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: calc(100% / var(--bar-scale, 1.5));
+  border-left: 1px solid var(--fg);
+  opacity: 0.6;
+}
+
+.metric-bar-fill {
+  height: 100%;
+  background: var(--gray-5);
+}
+
+.metric-row.worse-than-a .metric-bar-fill { background: repeating-linear-gradient(
+  45deg, var(--gray-5) 0 3px, var(--bg) 3px 6px
+); }
+
+.metric-row.static .metric-bar { display: none; }
+
+/* ---------------- honest summary ---------------- */
+
+.story {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  background: var(--gray-1);
+  line-height: 1.5;
+}
+
+.story h2 { margin-top: 0; font-size: 1rem; }
+.story .null-result { font-weight: 700; }
+.story .null-result::before { content: "\2014 "; } /* em dash glyph, no colour */

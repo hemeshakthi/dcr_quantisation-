@@ -321,11 +321,17 @@ check(f"no out-of-scope IMPORTS or DEFINITIONS (master §1) -- {content_hits or 
       not content_hits)
 
 # ---- 8. repo hygiene --------------------------------------------------------------
-ui_files = [p for d in ("backend", "frontend")
-            for p in (ROOT / d).rglob("*")
-            if p.is_file() and p.suffix in {".py", ".ts", ".tsx", ".js"}]
-check(f"no backend/ or frontend/ code yet (UI is master §14, a later phase) -- "
-      f"found {len(ui_files)}", not ui_files)
+# At Phase 3 time neither existed (master §14 UI is a later phase). frontend/ legitimately
+# gained real code once that later phase arrived (audit/verify_frontend.py verifies it); this
+# check is narrowed to backend/, which still doesn't exist -- that's Phase 11 (see
+# docs/api_contract.md, the binding spec Phase 11 must implement).
+backend_files = [p for p in (ROOT / "backend").rglob("*")
+                 if p.is_file() and p.suffix in {".py", ".ts", ".tsx", ".js"}]
+check(f"no backend/ code yet (Phase 11, per docs/api_contract.md) -- "
+      f"found {len(backend_files)}", not backend_files)
+check("frontend/ now has real code (master §14 UI phase reached) -- verified separately by "
+      "audit/verify_frontend.py",
+      (ROOT / "frontend" / "app.js").is_file())
 r = subprocess.run([sys.executable, "-m", "compileall", "-q", str(ROOT / "src")],
                    capture_output=True, text=True)
 check(f"all of src/ byte-compiles (exit {r.returncode})", r.returncode == 0)

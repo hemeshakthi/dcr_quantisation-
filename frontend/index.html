@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dCR Compression Study — Live Boundary Comparison</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>dCR Compression Study — Live Boundary Comparison</h1>
+    <p class="subtitle">
+      Every number on this page comes from a live inference call to the backend (see
+      <code>docs/api_contract.md</code>). Nothing here is hardcoded. Two identical model
+      outputs is treated as a bug, not a result.
+    </p>
+  </header>
+
+  <div id="collapse-banner" class="collapse-banner" hidden role="alert" aria-live="assertive">
+    <span id="collapse-text">MODEL COLLAPSE DETECTED</span>
+  </div>
+
+  <div id="connection-error" class="connection-error" hidden role="alert">
+    Cannot reach the backend API at <code id="api-base-shown"></code>.
+    <span id="connection-detail"></span>
+  </div>
+
+  <section class="controls">
+    <label for="image-select">Test image (by curvature bin):</label>
+    <select id="image-select" disabled aria-describedby="image-meta">
+      <option>Loading…</option>
+    </select>
+    <span id="image-meta" class="image-meta"></span>
+  </section>
+
+  <section class="reference-panels">
+    <figure class="panel">
+      <figcaption>Original</figcaption>
+      <div class="image-frame">
+        <img id="original-img" alt="Original microscopy image">
+      </div>
+    </figure>
+    <figure class="panel">
+      <figcaption>Ground truth</figcaption>
+      <div class="image-frame">
+        <img id="gt-img" alt="Ground truth mask">
+        <svg id="gt-contour-svg" class="contour-svg" viewBox="0 0 1024 1024" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+    </figure>
+  </section>
+
+  <section id="model-cards" class="model-cards" aria-live="polite">
+    <!-- one .model-card per loaded model, built from the <template> below by app.js -->
+  </section>
+
+  <section id="story" class="story" hidden>
+    <h2>What changed, in plain terms</h2>
+    <p id="story-text"></p>
+  </section>
+
+  <template id="model-card-template">
+    <article class="model-card">
+      <header>
+        <h2 class="model-label"></h2>
+        <p class="model-static-meta"></p>
+      </header>
+      <div class="image-frame">
+        <img class="pred-img" alt="Model prediction mask">
+        <canvas class="error-canvas"></canvas>
+        <svg class="contour-svg" viewBox="0 0 1024 1024" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <div class="error-toggle">
+        <label><input type="checkbox" class="toggle-fp" checked> FP (solid)</label>
+        <label><input type="checkbox" class="toggle-fn" checked> FN (hatched)</label>
+        <label><input type="checkbox" class="toggle-contour" checked> contour</label>
+      </div>
+      <dl class="metrics">
+        <div class="metric-row" data-metric="dice">
+          <dt>Dice <span class="dir">(higher better)</span></dt>
+          <dd><span class="metric-value">—</span><div class="metric-bar"><div class="metric-bar-fill"></div></div></dd>
+        </div>
+        <div class="metric-row" data-metric="boundary_f1_2px">
+          <dt>Boundary F1, 2px <span class="dir">(higher better)</span></dt>
+          <dd><span class="metric-value">—</span><div class="metric-bar"><div class="metric-bar-fill"></div></div></dd>
+        </div>
+        <div class="metric-row" data-metric="boundary_f1_5px">
+          <dt>Boundary F1, 5px <span class="dir">(higher better)</span></dt>
+          <dd><span class="metric-value">—</span><div class="metric-bar"><div class="metric-bar-fill"></div></div></dd>
+        </div>
+        <div class="metric-row" data-metric="hd95">
+          <dt>HD95, px <span class="dir">(lower better)</span></dt>
+          <dd><span class="metric-value">—</span><div class="metric-bar"><div class="metric-bar-fill"></div></div></dd>
+        </div>
+        <div class="metric-row static" data-metric="params_count">
+          <dt>Parameters</dt><dd><span class="metric-value">—</span></dd>
+        </div>
+        <div class="metric-row static" data-metric="model_size">
+          <dt>Model size</dt><dd><span class="metric-value">—</span></dd>
+        </div>
+        <div class="metric-row static" data-metric="curvature_bin">
+          <dt>Curvature bin (this image)</dt><dd><span class="metric-value">—</span></dd>
+        </div>
+      </dl>
+    </article>
+  </template>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
