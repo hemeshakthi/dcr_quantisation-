@@ -859,6 +859,350 @@ full-corpus value. See the CV note in the verification report — the σ=2 CV is
   measured result. Logged because it is a direct, documented resolution of two conflicting
   instructions, not a silent deviation from either.
 
+### A37 — Structured-pruning granularity: per-DoubleConv BLOCK, not per-individual-Conv2d [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-09**; module **RENAMED 2026-08-10 (Phase 7)** —
+  `src/compression/l1_structured.py` → `src/compression/structured_pruning.py` (see A41). Every
+  reference to `l1_structured.py`/`channel_mask.py`/`complexity.py` below should now be read as
+  `structured_pruning.py`/`mask_io.py`/`compression_accounting.py` — content unchanged, filenames
+  only.
+- Missing info: master §9 fixes the pruning CRITERION (L1 norm) and the PROTOCOL (prune once,
+  recalibrate BN, fine-tune) but not the granularity of "a channel" — whether the two Conv2d
+  layers inside one `DoubleConv` (master §7) may be pruned to different widths, or must share one.
+- Final decision: ONE kept-index set is selected per DoubleConv BLOCK, via the block's SECOND
+  conv's L1 norms (the one whose output actually propagates to the next stage or a skip
+  connection), and applied to BOTH convs in that block. `UNet.prunable_conv_names()` still lists
+  both conv names individually — `build_channel_mask` records the identical list under both, so
+  the mask JSON's contract with `mask_io.py`/`compression_accounting.py` is unchanged.
+- Scientific/practical justification: every one of the five model configs uses
+  `DoubleConv`'s default `mid_channels = out_channels` (none override it — verified by reading
+  all five `configs/model_*.yaml`), so a block's first and second conv already share one width
+  by construction *before* pruning. Selecting per-conv widths independently would therefore not
+  add any real degree of freedom the untouched network doesn't already collapse — it would only
+  add bookkeeping. Block-level granularity is the natural reading of the network's actual
+  degrees of freedom, not a simplification of them.
+- Expected reproducibility impact: NONE on the study's comparisons (B/B'/C all load the identical
+  mask regardless of granularity). Would matter only if a future model config gave `DoubleConv` a
+  genuinely different `mid_channels`, which none of the five frozen configs do.
+
+### A38 — Raster line-style parameters for server-rendered contour overlays [ASSUMPTION]
+- Status: **RESOLVED / APPLIED 2026-08-09**, `src/visualization/contours.py::_STYLE_PARAMS`.
+- Missing info: master §14 requires models to be visually distinguished by LINE STYLE, never
+  colour, but specifies no concrete raster parameters (thickness, dash length) — only vector
+  drawing tools (e.g. SVG `stroke-dasharray`) have a natural notion of "style name"; a raster
+  renderer (`cv2.polylines`/`cv2.line`) needs literal pixel thickness/on/off run lengths.
+  `LINE_STYLES` (the model→style-NAME mapping) was already fixed in the earlier frontend phase;
+  this assumption is only about the raster (thickness_px, dash_on_px, dash_off_px) triple each
+  name maps to.
+- Final decision: `solid`=(1,None,None), `solid_thick`=(3,None,None), `dotted`=(1,2,4),
+  `dashed`=(1,10,6), `dashdot`=(1,10,4) (approximated as a dash — a true dash-dot cycle needs a
+  4-segment period, judged not worth the added complexity for a B&W thickness/period cue),
+  `longdash`=(2,18,8). Every contour is additionally drawn with a black "halo" (a thicker pass in
+  color 0 beneath the white/255 line) because these bright-field cells have a bright core and a
+  dark rim (Phase 2 radial profile), so a plain single-colour line vanishes against one or the
+  other.
+- Scientific/practical justification: parameters were chosen so all six styles remain visually
+  distinguishable from each other when rendered onto a real 1024×1024 test image, verified by
+  `audit/verify_backend_integration.py` rendering real overlays end-to-end. This mirrors the
+  frontend phase's own vector dash-array choices in spirit (distinct period/on-fraction per
+  style) without being required to match them numerically, since the two are different rendering
+  systems (CSS `stroke-dasharray` vs. raster run-length) with no shared unit.
+- Expected reproducibility impact: NONE on any measured metric — this affects only how model
+  identity is visually rendered in the live demo and Phase 13's static figures, never Dice/
+  Boundary F1/HD95/HD95, which are computed on the raw prediction masks before any rendering.
+
+### A39 — Overlay/error-map rendering moved SERVER-SIDE; supersedes the frontend phase's client-side design [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-09** — a direct, explicit instruction change, not a silent
+  deviation.
+- The conflict: the earlier "frontend" phase designed error maps to be computed CLIENT-SIDE in
+  JavaScript (canvas pixel comparison between two fetched mask PNGs) specifically to avoid a
+  second network round trip, and contours as client-side SVG `<polyline>` elements. The
+  backend-authoring phase's instruction explicitly lists "error maps base64" as part of
+  `POST /api/infer`'s response — i.e., the backend itself renders and returns them.
+- Final decision: the later, more specific instruction governs. `src/visualization/contours.py`'s
+  `draw_contour`/`error_map` (implemented for real in this phase, previously Phase 3 stubs) are
+  now called by `backend/services/inference_service.py` for every model on every `/api/infer`
+  call, and `frontend/app.js` was simplified to place the three resulting PNGs
+  (`prediction_mask_png_base64`/`overlay_png_base64`/`error_map_png_base64`) directly into
+  `<img>` elements — no client-side canvas pixel loop, no SVG polyline construction, no
+  `DASH_ARRAY`/`STROKE_WIDTH` constant to keep in sync with the backend by hand.
+- Scientific/practical justification: server-side rendering means the live demo UI and Phase 13's
+  static paper figures share ONE rendering implementation (`contours.py`), so they cannot
+  silently disagree about how a boundary or an error region is drawn — a stronger correctness
+  property than the client-side design had, which is worth the extra round trip. The extra
+  payload size (3 PNGs per model per case instead of 1) was judged acceptable for a research
+  demo tool, not a high-traffic production service.
+- Expected reproducibility impact: NONE on any measured metric (Dice/Boundary F1/HD95 are computed
+  from the same prediction masks either way); affects only where pixels are drawn, not what value
+  is reported.
+
+### A40 — Backend reconstructs a checkpoint's architecture from its OWN tensor shapes, not from configs/pruning.yaml + a mask file [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-09**, `backend/services/model_registry.py::build_model_from_state_dict`.
+- Missing info: `UNet.from_channel_mask(cfg, mask)` (master §9's TRAINING-time constructor) needs
+  a config plus a saved channel-mask JSON to know a pruned model's per-stage widths. The backend
+  loads whatever checkpoints exist at serving time, potentially long after training, on a host
+  that may not have — or may have a different-ratio — mask file on disk.
+- Final decision: `build_model_from_state_dict` reads the number of encoder/decoder stages and
+  each stage's width directly off the checkpoint's own saved tensor shapes
+  (`encoders.{i}.block.3.weight.shape[0]`, etc.), and whether upsampling is bilinear or
+  `ConvTranspose2d` from which key pattern is present — then constructs a matching `UNet` and
+  loads the state dict into it. No `configs/pruning.yaml` or channel-mask JSON is read at serving
+  time at all, for Vanilla/A OR for B/B'/C.
+- Scientific/practical justification: a checkpoint's weight tensors are fully self-describing —
+  their shapes ARE the architecture. Deriving widths from a side file that might be absent, moved,
+  or (if pruning is ever re-run at a different ratio) simply out of date would let the backend
+  either crash on a perfectly loadable checkpoint or, worse, silently attempt to load weights into
+  a skeleton of the wrong shape. Reading the shapes off the tensors that will actually receive
+  them cannot disagree with what is being loaded.
+- Expected reproducibility impact: NONE — this changes only how the SERVING path reconstructs an
+  already-trained network's shape, not the TRAINING-time protocol (`from_channel_mask`/
+  `apply_channel_mask`, both unchanged) that master §9 governs.
+
+### A41 — Compression module rename + StructuredPruner class: reconciling Phase 7's naming with the backend-authoring phase's earlier ad-hoc names [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-10 (Phase 7)**.
+- The conflict: the backend-authoring phase needed real pruning code as a PREREQUISITE (no
+  Phase 7 instruction had been given yet at that point) and invented
+  `src/compression/l1_structured.py` (functional style), `channel_mask.py`, `complexity.py` out
+  of necessity — real, tested, and verified end-to-end via `audit/verify_backend_integration.py`
+  before Phase 7's own instruction arrived asking for `structured_pruning.py` with a
+  `StructuredPruner` class, `mask_io.py`, and `compression_accounting.py`. Checking
+  `PROJECT_MASTER.md` §9 directly confirmed it specifies the pruning PROTOCOL and CRITERION only
+  — no file or class names — so neither naming was "more authoritative" than the other; this was
+  a genuine collision between two of this project's own naming choices, not a spec conflict.
+- Final decision: RENAMED (not duplicated) `l1_structured.py` → `structured_pruning.py`,
+  `channel_mask.py` → `mask_io.py`, `complexity.py` → `compression_accounting.py` (`git mv`,
+  preserving history), then added a `StructuredPruner` class to `structured_pruning.py` as an OO
+  facade that DELEGATES to the same already-tested module-level functions
+  (`channel_l1_norms`/`select_kept_channels`/`build_channel_mask`/`apply_channel_mask`/
+  `prune_model`) rather than reimplementing the algorithm. `mask_io.py` additionally gained
+  `apply_mask_to_checkpoint()` (load a mask, apply it to a FRESH checkpoint's weights, return
+  the hash — Phase 7's literal description of what that module should do). Every cross-reference
+  (`src/models/unet.py`, `audit/verify_phase3.py`, `audit/verify_phase4.py`,
+  `audit/verify_backend_integration.py`, this file's own A37) was updated in the same change.
+- Scientific/practical justification: two parallel implementations of the identical pruning
+  algorithm under different names would be a real hazard in a project whose central discipline
+  is provable identity between B/B′/C (mask hashes, complexity equality) — exactly the kind of
+  silent-divergence risk master §9's hash system exists to prevent, just at the source-code
+  level instead of the data level. A clean rename with zero compatibility shims (no re-exports
+  of the old names) keeps ONE tested implementation as the only one that exists.
+- Expected reproducibility impact: NONE — pure rename/refactor, no algorithmic change. Verified
+  by re-running the full existing test suite (`audit/verify_backend_integration.py`,
+  `audit/verify_phase3.py`) after the rename with no regressions.
+
+### A42 — `experiments/multi_seed_train.py` extended with a pruned-finetune path for B/B′/C [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-10 (Phase 7-RUN notebook authoring)**.
+- Missing info: the runner (master §17's single Kaggle entry point) only ever built a model via
+  `UNet.from_config(cfg, init_seed=...)` — i.e. a FRESH, randomly-initialised network. Correct
+  for Vanilla/A. For B/B′/C, calling the SAME runner with their configs would have silently
+  trained a full-size, UNPRUNED network mislabeled as "B_pruned"/etc. — a "successful-looking
+  run with wrong results" (`docs/kaggle_run_contract.md`'s own opening warning) that no existing
+  check would have caught, since the run would complete, log a row, and produce a loadable
+  checkpoint — just the wrong architecture's weights under the wrong name.
+- Found while authoring `experiments/kaggle_prune_and_finetune_bc.ipynb` (Phase 7-RUN): its
+  Cell 8 needed to call the runner for B/B′/C, which is what surfaced that the runner had no
+  code path for master §9's "load the SAME pruned base" requirement at all.
+- Final decision: added `_build_pruned_base(cfg, pruning_cfg, args, train_loader)` to
+  `multi_seed_train.py`. When a config has `pruning.enabled` and `finetune.from_pruned_base`
+  both true, `main()` calls this instead of `UNet.from_config`: it loads Model A's checkpoint
+  into a fresh pre-pruning-shape skeleton, applies the mask at `pruning.channel_mask`
+  (hash-verified against the REQUIRED `--channel-mask-hash` CLI arg — missing it is now a
+  config-validation failure, exit code 2, not a silent skip), and recalibrates BatchNorm on an
+  UNAUGMENTED, UNSHUFFLED reconstruction of the run's own train split
+  (`train_loader.dataset.frame` re-wrapped without the augmenter — master §9: "identical
+  images/order" across B/B′/C). Every one of B/B′/C redoes this INDEPENDENTLY in its own
+  single-job subprocess (deterministic given the same mask + checkpoint + recalibration stream,
+  so all three land on bit-identical starting weights) rather than depending on a shared
+  intermediate "pruned base" checkpoint passed between jobs — preserving master §10's
+  single-job/crash-isolation design (a crashed seed must never take the other two with it).
+- Scientific/practical justification: this is a strict COMPLETION of the master §9 protocol the
+  runner was always supposed to implement, not a new design choice — the protocol was already
+  fully specified (train A → prune once → save mask+hash → B/B′/C load the SAME pruned base →
+  recalibrate BN → fine-tune); only the code enacting the "B/B′/C load..." step was missing.
+- Expected reproducibility impact: would have been SEVERE (wrong architecture silently trained
+  under the right name) had it shipped unnoticed; NONE now that it's implemented and verified —
+  `audit/verify_phase7.py` exercises this exact function end-to-end against a synthetic fixture,
+  including confirming a WRONG `--channel-mask-hash` is rejected rather than silently accepted.
+
+### A43 — Local verification of pruning MECHANICS uses reduced-width models and process isolation, not the full 1024×1024/31M-parameter measurement [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-10 (Phase 7 synthetic validation)**.
+- Missing info: none from master — this is a purely local, host-specific authoring constraint
+  (A18: this host's Windows commit limit equals physical RAM), surfaced for the first time by
+  actually exercising `measure_complexity` (thop-based params/FLOPs profiling) against the REAL
+  frozen architecture's full 31M parameters, which no earlier phase had done (earlier smoke
+  tests used tiny custom-width models that never approached this memory footprint).
+- What was found, in order of discovery: (1) `copy.deepcopy(model)` immediately followed by
+  `thop.profile` on the full architecture reproducibly SEGFAULTED at 256×256 input but not at
+  64×64 — isolated by bisecting deepcopy-vs-not crossed with input size. (2) Removing the
+  deepcopy (profiling the model directly, then explicitly stripping the `total_ops`/
+  `total_params` buffers thop leaves behind — verified via `state_dict()` key-equality that this
+  achieves the same "caller's model is left clean" guarantee the deepcopy existed for) fixed the
+  256×256 case but the SAME crash still occurred at the real 1024×1024 default. (3) Bisecting
+  further showed the crash is INTERMITTENT even in a freshly-spawned subprocess with nothing
+  else running — reproduced once inside a bare `torch.save()` call with no thop involved at
+  all — indicating genuine, currently-active host memory pressure (measured: ~3.6-4 GB free of
+  16 GB total at the time), not a deterministic bug tied to one function or input size.
+- Final decisions, layered: (a) `measure_complexity` no longer deep-copies its input — a
+  real, permanent fix (`src/compression/compression_accounting.py`), since the deepcopy added
+  memory pressure for no benefit once the buffer-stripping alternative was verified equivalent.
+  (b) `prune_model`/`StructuredPruner.prune()` gained an `input_shape` parameter (default
+  unchanged at `(1,1,1024,1024)` for real usage) so a memory-constrained caller can override it.
+  (c) `audit/verify_phase7.py` runs its thop-touching step in an isolated subprocess per ratio
+  (same pattern as `audit/verify_backend_integration.py`'s build/verify split), with up to 3
+  retries, at a reduced `(1,1,128,128)` input. (d) The synthetic stand-in model itself uses the
+  real `UNet` class at QUARTER channel widths (still 4 encoder stages + bottleneck + 4 decoder
+  stages + real skip connections — every code path this phase tests is exercised identically;
+  only the absolute channel counts differ) rather than the full frozen widths.
+- Scientific/practical justification: Phase 7's own framing is "verifies pruning MECHANICS...
+  even though it says nothing about real model quality yet" — a reduced-width real-class model
+  exercises 100% of the same mechanics (channel selection, mask save/load/hash, BN/Conv
+  transplant, BatchNorm recalibration) that the full-width model would, at a small fraction of
+  the memory footprint. The REAL 1024×1024, full-width measurement is unaffected: it happens for
+  real on Kaggle's GPU once actual training produces an actual Model A checkpoint (Phase 7-RUN),
+  where `measure_complexity`'s default `input_shape` and `prune_model`'s default both remain
+  exactly master §9's 1024×1024 (A19) — nothing about the production default changed.
+- Expected reproducibility impact: NONE on any real result (this affects only local,
+  authoring-time verification of code correctness). The deepcopy removal is a strict
+  improvement everywhere it runs, including on Kaggle.
+
+### A44 — Metrics/statistics module layout: split + consolidate rather than duplicate (Phase 8) [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-10 (Phase 8)**.
+- The conflict: same pattern as A41 (Phase 7). `src/metrics/segmentation.py` already existed as
+  a REAL, TESTED implementation of Dice/Boundary-F1/HD95 with live callers
+  (`backend/services/metric_service.py`, `src/training/validator.py`, several `audit/*`
+  scripts). Phase 8's instruction asked for `src/metrics/dice_metrics.py`, `boundary_f1.py`,
+  `hausdorff.py` and `src/metrics/statistical_tests.py` — none of which existed under those
+  names, though `src/evaluation/statistics.py` (a Phase 3 scaffold, never implemented, zero real
+  callers) already had matching function signatures for most of the statistics half, and
+  `docs/power_analysis.py` already had a REAL, tested power-analysis implementation Phase 8
+  asked for at `src/evaluation/power_analysis.py` instead.
+- Final decision, per-file, based on whether real callers already existed:
+  - **`segmentation.py` (has real callers) → SPLIT, not renamed.** `dice_score` moved to
+    `dice_metrics.py`; `extract_boundary`+`boundary_f1` moved to `boundary_f1.py`; `hd95` moved
+    to `hausdorff.py` (importing `extract_boundary` from `boundary_f1.py`, preserving the ONE
+    shared boundary definition). `segmentation.py` itself became a thin composition layer that
+    imports all three under their original names plus keeps `compute_all_metrics` — every
+    existing caller's `from src.metrics.segmentation import dice_score` keeps working, verified
+    unchanged by direct import test.
+  - **`statistics.py`/`evaluate.py` (zero real callers) → DELETED, logic reimplemented at the
+    new names/locations.** `git rm`, not a rename-with-shim, since nothing depended on the old
+    names — `statistical_tests.py` (real: `paired_wilcoxon`, `rank_biserial_effect_size`,
+    `paired_t_test`, `holm_bonferroni_correction`, `tost_equivalence_test`,
+    `partial_correlation`) and `eval_runner.py` (real: `load_model_for_eval`, `predict_image`,
+    `evaluate_run`, `detect_identical_outputs`, `aggregate_by_bin`) absorbed their designs
+    (the Phase 3 stub docstrings were detailed and correct; only the location/some names moved).
+    `audit/verify_phase3.py`'s module-import list was updated accordingly.
+  - **`docs/power_analysis.py` (real, tested, has a real caller in `audit/verify_stats_design.py`)
+    → MOVED (`git mv`), not reimplemented.** It is analysis code with a CLI, not documentation;
+    Phase 8's requested location (`src/evaluation/power_analysis.py`) is also the architecturally
+    correct one. `audit/verify_stats_design.py` and `docs/success_criteria.md`'s one path
+    reference were updated to match; content and every numeric result are byte-identical.
+  - **`UNet.from_state_dict_shapes`** (A40's shape-introspection helper, originally written
+    inline in `backend/services/model_registry.py`) was promoted to a `UNet` classmethod
+    (`src/models/unet.py`) rather than having `src/evaluation/eval_runner.py` import it FROM
+    `backend/` — `src/` depending on `backend/` would invert the project's layering (backend
+    depends on src, never the reverse). `model_registry.py` now aliases the classmethod under
+    its old name so nothing there changed behaviourally.
+- Scientific/practical justification: identical to A41 — two implementations of the same metric
+  or statistical test would be a correctness hazard in a project whose central discipline is
+  exact, provable numbers (Golden Rule 3: every UI number traces to a live inference call). The
+  split/delete/move decision per file was made on a single, consistent rule (real callers →
+  preserve via composition; no real callers → replace cleanly), not case-by-case improvisation.
+- Expected reproducibility impact: NONE — every moved/split function's numeric behaviour is
+  byte-identical to before; verified by re-running `audit/verify_backend_integration.py` (uses
+  `segmentation.py`'s public names) and `audit/verify_stats_design.py` (uses the moved
+  `power_analysis.py`) after the change, both still PASS.
+
+### A45 — Failure taxonomy: `taxonomy.py` naming, and RECALL/PRECISION (not symmetric IoU) for merge/split detection [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-10 (Phase 9)**.
+- Naming, same pattern as A41/A44: `src/failure/detectors.py` was a Phase 3 scaffold (never
+  implemented, zero real callers — confirmed by search before deleting) with detailed,
+  already-correct docstrings for all six detectors plus `run_all_detectors`/`p6_ratio`. Deleted
+  (`git rm`, not renamed-with-shim, since nothing depended on the old name) and reimplemented at
+  `src/failure/taxonomy.py`, the location Phase 9's instruction specifies, reusing those
+  docstrings' designs almost verbatim. `audit/verify_phase3.py`'s module-import list updated.
+- A genuine correctness finding while building the synthetic validation, not just a naming
+  choice: `configs/evaluation.yaml` names the merge/split field `iou_threshold`, and the Phase 3
+  stub's docstring said "IoU threshold" too — but **symmetric IoU cannot detect a merge or split
+  at any threshold >= 0.5**, provably. For a predicted blob `P` formed by merging GT instances
+  `G1`, `G2` (so `P ⊇ G1 ∪ G2`), whichever instance is partitioned to keep the pixels the other
+  "won" in an overlap has `IoU(P, G_i) = |G_i| / |P|`, and `|P| ≥ |G1| + |G2| - |overlap|` while
+  `G1` and `G2` are disjoint by construction of a partition — algebraically this caps at exactly
+  0.5 in the best case and is strictly *below* 0.5 for any real overlap, so a `> 0.5` test can
+  never flag both `G1` and `G2` against the same `P`. Discovered by attempting to construct the
+  positive (merge) synthetic test case and finding no geometry could pass a literal-IoU
+  implementation at threshold 0.5.
+- Final decision: `cell_merging` uses RECALL (`|prediction ∩ gt_instance| / |gt_instance|`) --
+  "how much of this GT cell does this one predicted blob explain" -- and `cell_splitting` uses
+  the mirror-image PRECISION (`|prediction_fragment ∩ gt_instance| / |prediction_fragment|`) --
+  "how much of this predicted fragment consists of this one GT cell". Both are standard in the
+  instance-segmentation literature for exactly this purpose. The config field stays named
+  `iou_threshold` (master §12 already locked the VALUE, 0.5, before this was discovered; only
+  the formula computing "does this pair count" changed, not the threshold number itself or
+  master's own text) — `taxonomy.py`'s docstrings document the actual semantics precisely so a
+  future reader is not misled by the field's name.
+- Scientific/practical justification: this is a bug-fix, not a threshold change — the LOCKED
+  value (0.5) is untouched; what changed is the formula that was mathematically incapable of
+  ever firing at that value. Not fixing it would have made `cell_merging`/`cell_splitting`
+  silently report zero merges/splits FOREVER regardless of real model behaviour (a null result
+  that is actually an implementation bug, exactly the kind of silent failure master §12's
+  synthetic-validation requirement exists to catch before real inspection begins).
+- `min_loss_fraction=0.5` for `thin_structure_loss` (majority of a thin structure must be absent
+  to count as "lost") is a genuine new [ASSUMPTION]: not present in `configs/evaluation.yaml`
+  (only `max_width_px` is locked there), and the least arbitrary choice available (a true
+  majority, not a supermajority or a bare non-zero threshold).
+- The synthetic `cell_merging`/`cell_splitting` validation scenes use 30 synthetic cells (not a
+  2-cell toy), grounded in the REAL measured Phase 1/2 per-image object counts re-derived from
+  `data/processed/preprocess_manifest.csv` (stardist_tcell 88-203, stardist_flowchamber 16-134;
+  30 falls inside that combined range) — checked directly in `audit/verify_phase9.py`, not just
+  asserted in prose.
+- Expected reproducibility impact: NONE on any locked threshold VALUE. Would have been SEVERE
+  (two of six detectors permanently silent) had the IoU-vs-recall/precision bug shipped
+  unnoticed into real evaluation.
+
+### A46 — Final-figures scope (Phase 12): 3 functions only, and their design choices [ENGINEERING]
+- Status: **RESOLVED / APPLIED 2026-08-10 (Phase 12)**.
+- Scope: unlike Phases 7–9, `src/visualization/figures.py` already had FIVE Phase-3 stub
+  functions (`metric_by_bin_figure`, `dice_vs_boundary_figure`, `curvature_response_figure`,
+  `failure_taxonomy_figure`, `compression_table`, plus `generate_all_figures`) — none of which
+  are a literal match for the three capabilities Phase 12's instruction actually named (contour
+  crops with a selection rule; boundary-band error maps; a continuous curvature-percentile
+  curve). Rather than force-fit the instruction onto those five names or implement all of them
+  speculatively, four NEW functions were added instead (`select_stratified_median_images`,
+  `contour_crop_panel_figure`, `boundary_band_error_map_figure`,
+  `curvature_percentile_curve_figure`), and the five original stubs were left untouched —
+  Phase 12's own instruction scoped this to "the 3 figure functions", not the whole module.
+- **Selection rule** (Figure 1): "stratified-random + median" is read as, per curvature bin, ONE
+  image at the RANK-MEDIAN of a chosen metric column (the middle element of that bin sorted
+  ascending — simple, exactly reproducible, no interpolation choice needed for even-sized bins)
+  plus `n_per_bin - 1` further images by seeded random sampling from the bin's remainder. This
+  is DELIBERATELY a different rule from the Visual Gate's (master §13: top-10 high-curvature
+  only, seed=42, for a blind pass/fail judgement) — different purpose (illustrative paper
+  figure vs. hard-stop gate), different rule, not to be confused or merged.
+- **Rendering reuse, not reimplementation:** `contour_crop_panel_figure` is a thin wrapper
+  around the already-implemented, already-tested `src/visualization/contours.py::four_column_figure`
+  (backend-authoring phase) rather than a second rendering path — a paper figure panel and the
+  live backend's contour overlays can never visually disagree, since both are the same function.
+- **Boundary-band definition reuse:** `boundary_band_error_map_figure` extracts its band via a
+  numpy↔torch round trip through `src/losses/boundary_band.py::extract_boundary_band` — the
+  SAME function master §8 requires the dCR and generic boundary losses to share — rather than a
+  third, independently-drifting band implementation. This figure's band is therefore
+  PROVABLY the same region those losses actually optimise over, not merely intended to be.
+- **Curvature-percentile curve:** percentile is RANK-based (`100*(i+0.5)/n` within each model's
+  own sorted data), not raw-curvature-score-based, so smoothing is well-defined even where
+  images are unevenly spaced in curvature — matches `curvature_response_figure`'s original
+  stub docstring's own reasoning for using the continuous score at all ("does not inherit the
+  mid bin's small n"). Moving-average window is in RANK units for the same reason. Model
+  identity uses `src.visualization.contours.LINE_STYLES`' names mapped to matplotlib
+  linestyles, plus (redundantly, since hue is never load-bearing) a fixed grayscale colour per
+  line — verified by inspecting the actual `Line2D.get_color()` values, not just by not calling
+  `plt.rcParams` with colour, since matplotlib's default cycle IS chromatic and an unguarded
+  `ax.plot()` call would silently violate "no colour anywhere" otherwise.
+- Scientific/practical justification: identical to A41/A44/A45 in spirit (reuse real tested
+  primitives rather than duplicate them) but this entry is scope-and-design, not a
+  naming-collision resolution — no orphaned stub was deleted this phase.
+- Expected reproducibility impact: NONE on any measured metric (these are visualisation
+  functions only); Figure 1's selection is itself required to be, and was verified to be,
+  exactly reproducible given its seed.
+
 ### A29 — Confirmatory test family reduced 24 → 16 (mid bin descriptive-only) [ENGINEERING]
 - Status: **RESOLVED / APPLIED 2026-08-06** (authorised, pre-training). Recorded because it is a
   deviation from master §6's stated "~24 tests".

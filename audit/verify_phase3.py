@@ -43,14 +43,17 @@ MODULES = [
     "src.models.unet",
     "src.losses.boundary_band", "src.losses.dice", "src.losses.dcr_loss",
     "src.losses.generic_boundary", "src.losses.combined",
-    "src.compression.channel_mask", "src.compression.l1_structured",
-    "src.compression.bn_recalibration", "src.compression.complexity",
+    "src.compression.mask_io", "src.compression.structured_pruning",
+    "src.compression.bn_recalibration", "src.compression.compression_accounting",
     "src.metrics.segmentation", "src.metrics.per_image",
-    "src.failure.detectors",
+    "src.metrics.dice_metrics", "src.metrics.boundary_f1", "src.metrics.hausdorff",
+    "src.metrics.statistical_tests",
+    "src.failure.taxonomy",
     "src.training.seed_manager", "src.training.checkpointing",
     "src.training.validator",
     "src.training.trainer", "src.training.experiment_log",
-    "src.evaluation.evaluate", "src.evaluation.statistics",
+    "src.evaluation.eval_runner", "src.evaluation.bootstrap_ci",
+    "src.evaluation.power_analysis", "src.evaluation.curvature_stratified",
     "src.visualization.contours", "src.visualization.figures",
     "src.visualization.visual_gate",
 ]
@@ -83,6 +86,22 @@ IMPLEMENTED_MODULES = {
     "src.training.seed_manager", "src.training.validator", "src.training.checkpointing",
     "src.training.trainer", "src.training.experiment_log",
     "src.compression.bn_recalibration",         # Phase 6 -> verify_phase6.py
+    "src.compression.structured_pruning", "src.compression.mask_io",
+    "src.compression.compression_accounting",   # Phase 7 -> verify_phase7.py / verify_backend_integration.py
+    "src.visualization.contours",                # backend-authoring phase -> verify_frontend.py / verify_backend_integration.py
+    "src.metrics.dice_metrics", "src.metrics.boundary_f1", "src.metrics.hausdorff",
+    "src.metrics.statistical_tests", "src.metrics.per_image",
+    "src.evaluation.eval_runner", "src.evaluation.bootstrap_ci",
+    "src.evaluation.power_analysis", "src.evaluation.curvature_stratified",  # Phase 8 -> verify_phase8.py
+    "src.failure.taxonomy",                      # Phase 9 -> verify_phase9.py
+    # Phase 12 -> verify_phase12.py. src.visualization.figures now has a MIX of real functions
+    # (select_stratified_median_images, contour_crop_panel_figure, boundary_band_error_map_figure,
+    # curvature_percentile_curve_figure) and legitimate later-phase stubs (metric_by_bin_figure,
+    # dice_vs_boundary_figure, curvature_response_figure, failure_taxonomy_figure,
+    # compression_table, generate_all_figures) -- this coarse per-MODULE scan can't check "some
+    # functions raise, some don't" within one file, so the module is exempted here; the 6
+    # remaining stubs were confirmed by direct inspection to still raise NotImplementedError.
+    "src.visualization.figures",
 }
 stub_total, stub_raising = 0, 0
 for name, mod in imported.items():
@@ -321,14 +340,14 @@ check(f"no out-of-scope IMPORTS or DEFINITIONS (master §1) -- {content_hits or 
       not content_hits)
 
 # ---- 8. repo hygiene --------------------------------------------------------------
-# At Phase 3 time neither existed (master §14 UI is a later phase). frontend/ legitimately
-# gained real code once that later phase arrived (audit/verify_frontend.py verifies it); this
-# check is narrowed to backend/, which still doesn't exist -- that's Phase 11 (see
-# docs/api_contract.md, the binding spec Phase 11 must implement).
-backend_files = [p for p in (ROOT / "backend").rglob("*")
-                 if p.is_file() and p.suffix in {".py", ".ts", ".tsx", ".js"}]
-check(f"no backend/ code yet (Phase 11, per docs/api_contract.md) -- "
-      f"found {len(backend_files)}", not backend_files)
+# At Phase 3 time neither existed (master §14 UI and its backend are later phases). Both have
+# since gained real code (backend-authoring phase) and are verified separately by
+# audit/verify_frontend.py (structural + live TestClient smoke test) and
+# audit/verify_backend_integration.py (full real-fixture end-to-end proof) -- this check just
+# confirms both directories are non-empty, not a scope boundary anymore.
+check("backend/ now has real code (backend-authoring phase reached) -- verified separately by "
+      "audit/verify_backend_integration.py",
+      (ROOT / "backend" / "main.py").is_file())
 check("frontend/ now has real code (master §14 UI phase reached) -- verified separately by "
       "audit/verify_frontend.py",
       (ROOT / "frontend" / "app.js").is_file())
@@ -349,5 +368,6 @@ if failures:
     sys.exit(1)
 print("RESULT: PASS — Phase 3 verification complete.")
 print("=" * 78)
-print("Skeletons only: every body raises NotImplementedError, so nothing here can")
-print("produce a number. Logic lands in Phase 4+.")
+print("Remaining skeletons (src.visualization.figures/visual_gate, Phase 13) still raise")
+print("NotImplementedError. Everything else listed in IMPLEMENTED_MODULES is real logic,")
+print("verified by its own phase's audit script.")
