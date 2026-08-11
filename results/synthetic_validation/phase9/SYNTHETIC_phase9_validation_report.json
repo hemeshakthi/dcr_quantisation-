@@ -1,0 +1,74 @@
+{
+  "phase": 9,
+  "synthetic": true,
+  "warning": "All mask pairs are SYNTHETIC, engineered with known-by-construction answers. This report verifies detector CORRECTNESS, not real model failure rates.",
+  "n_synthetic_cells": 30,
+  "real_density_range_tcell": [
+    88,
+    203
+  ],
+  "real_density_range_flowchamber": [
+    16,
+    134
+  ],
+  "thresholds_used": {
+    "enabled": true,
+    "corner_collapse": {
+      "curvature_percentile": 90.0,
+      "min_drop": 0.3
+    },
+    "boundary_smoothing": {
+      "min_perimeter_ratio": 0.9
+    },
+    "cell_merging": {
+      "iou_threshold": 0.5,
+      "requires_instances": true
+    },
+    "cell_splitting": {
+      "iou_threshold": 0.5,
+      "requires_instances": true
+    },
+    "thin_structure_loss": {
+      "max_width_px": 3.0
+    },
+    "curvature_flattening": {
+      "percentile": 90.0,
+      "min_drop": 0.15,
+      "merge_with_corner_collapse_if_redundant": false
+    },
+    "curvature_related": [
+      "corner_collapse",
+      "boundary_smoothing",
+      "curvature_flattening"
+    ],
+    "non_curvature_related": [
+      "cell_merging",
+      "cell_splitting",
+      "thin_structure_loss"
+    ]
+  },
+  "p6_ratio_example": {
+    "curvature_reduction": 32.0,
+    "non_curvature_reduction": 3.0,
+    "ratio": 10.666666666666666,
+    "counts_b": {
+      "corner_collapse": 20,
+      "boundary_smoothing": 15,
+      "curvature_flattening": 18,
+      "cell_merging": 10,
+      "cell_splitting": 8,
+      "thin_structure_loss": 6
+    },
+    "counts_c": {
+      "corner_collapse": 8,
+      "boundary_smoothing": 6,
+      "curvature_flattening": 7,
+      "cell_merging": 9,
+      "cell_splitting": 7,
+      "thin_structure_loss": 5
+    }
+  },
+  "n_failed": 0,
+  "n_warnings": 0,
+  "failures": []
+}
