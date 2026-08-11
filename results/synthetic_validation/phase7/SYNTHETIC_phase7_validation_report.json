@@ -1,0 +1,33 @@
+{
+  "phase": 7,
+  "synthetic": true,
+  "warning": "Stand-in checkpoint is an UNTRAINED random-init UNet. This report verifies pruning MECHANICS only and makes no claim about real model quality.",
+  "architecture": {
+    "architecture": "unet",
+    "in_channels": 1,
+    "out_channels": 1,
+    "encoder_channels": [
+      16,
+      32,
+      64,
+      128
+    ],
+    "bottleneck_channels": 256,
+    "decoder_channels": [
+      128,
+      64,
+      32,
+      16
+    ],
+    "bilinear_upsample": false,
+    "final_activation": null,
+    "batchnorm": true
+  },
+  "ratios_tested": [
+    0.5,
+    0.7
+  ],
+  "n_failed": 0,
+  "n_warnings": 0,
+  "failures": []
+}

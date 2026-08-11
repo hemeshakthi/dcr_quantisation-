@@ -159,3 +159,55 @@ genuinely different, with the mean-absolute-difference printed for each of the 9
 and the experiment log is complete. This script has been integration-tested against real (tiny)
 checkpoints built the same way `Trainer.fit()` builds them, in both the passing case and a
 deliberately-forced collapse case (two identical checkpoints), and correctly PASS/FAILs each.
+
+---
+
+## 8. Concrete instance: Phase 7-RUN (prune Model A, fine-tune B/B′/C × 2 ratios × 3 seeds)
+
+Notebook: `experiments/kaggle_prune_and_finetune_bc.ipynb` (10 cells: markdown intro, GPU check,
+writable-copy + batch_size/env setup, staged dependency install, import verification, repo/data
+sanity check, prune-once-per-ratio + BN-recalibration dry run, the 18-entry RUN_PLAN, the
+18-run training loop with per-run Kaggle Dataset push, and a summary/next-steps cell).
+**Authored 2026-08-10, not yet executed** — it depends on Model A's real checkpoint
+(`checkpoints/A_dcr_seed1/best.pt`), which does not exist locally until Phase 6-RUN's session
+completes and its artifacts are downloaded back per §7 above.
+
+**Lessons carried forward from the Phase 6-RUN session** (2026-08-10), each with its own inline
+comment at the point of use in the notebook — recorded here too so a future session's notebook
+inherits them even if it isn't a direct copy of this one:
+
+| Lesson | Fix |
+|---|---|
+| `/kaggle/input/` is read-only; editing `configs/*.yaml` there silently no-ops | `shutil.copytree()` into `/kaggle/working/` FIRST; never symlink into `/kaggle/input/` |
+| `batch_size=4` (the repo default) OOMs pruning/fine-tuning a full U-Net at 1024×1024 on a T4 | Set `batch_size=1` in the writable config copy, immediately after copying |
+| `batch_size=2` was tested and is SLOWER than `1` (168.7 vs 132.1 min/run) — not just "also OOMs" | Use `1`, not `2`, even though `2` doesn't crash |
+| Fragmented CUDA allocator across many sequential runs can OOM even under total-usage headroom | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` |
+| Installing all pip packages in one call intermittently produced `numpy.dtype`/`numpy.rec`/`numpy.strings` binary-incompatibility errors | Stage the install: numpy alone → verify import → scipy alone → verify import → everything else in one batch |
+| Relative paths (`"experiments/multi_seed_train.py"`) made all 6 Phase 6-RUN runs fail INSTANTLY with `FileNotFoundError` | Absolute paths (`REPO_ROOT / "experiments" / ...`) AND an explicit `cwd=str(REPO_ROOT)` on every `subprocess.run()` call |
+| `FileLink` / the notebook Output pane's browser download are both unreliable for files this large | `kaggle datasets create`/`kaggle datasets version` after every completed run, using Kaggle Secrets (`KAGGLE_USERNAME`/`KAGGLE_KEY`) for auth; the exact local `kaggle datasets download -d ... --unzip` command is printed after each push |
+| Session GPU quota may run out mid-`RUN_PLAN` | `RUN_PLAN` is a plain editable list; a later session trims it to the not-yet-completed `(model, ratio, seed)` entries by checking `results/tables/experiment_log.csv` first (same per-run-append safety property as §7's `RUN_PLAN`) |
+
+**GPU: T4, not P100** for this notebook specifically — the reverse of §7's Phase 6-RUN guidance
+(P100 preferred there). Cell 1 asserts `"T4" in torch.cuda.get_device_name(0)` and raises
+immediately if not, rather than silently training on whatever accelerator happened to be
+selected and only noticing from run duration or a later OOM.
+
+**A real gap found and fixed while authoring this notebook.** `experiments/multi_seed_train.py`
+previously only ever built a model via `UNet.from_config(...)` — correct for Vanilla/A, but for
+B/B′/C that would have silently trained a full-size, UNPRUNED network mislabeled as the pruned
+one the first time this notebook's Cell 8 actually ran (exactly the "successful-looking run with
+wrong results" failure mode this file's own opening paragraph warns against). Fixed by adding
+`_build_pruned_base()` (master §9: load Model A's checkpoint, apply the shared mask, recalibrate
+BatchNorm on an identical batch stream) as a real code path in the runner itself — see A42 in
+`docs/implementation_assumptions.md`. Every one of B/B′/C independently redoing this (rather
+than sharing one persisted "pruned base" checkpoint between jobs) keeps them single-job/
+crash-isolated (§4 above) while still being provably identical, since the mask hash and the
+recalibration batch order are both deterministic and verified, not merely assumed.
+
+**Verification once all 18 rows are complete**: author and run a Phase 7-RUN verification
+script mirroring `audit/verify_phase6_run.py`'s pattern (§7 above), extended for B/B′/C:
+all 18 checkpoints load; B/B′/C at each ratio report IDENTICAL measured params/FLOPs and an
+identical `mask_hash` (master §9); and no two of Vanilla/A/B/B′/C collapse to identical outputs
+on a probe image (Golden Rule 2). This script does not exist yet — it is scoped to the future
+session that actually has 18 real rows to check, matching how `verify_phase6_run.py` itself was
+only written once Phase 6-RUN's real artifacts existed to verify.

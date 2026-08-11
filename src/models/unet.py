@@ -349,7 +349,7 @@ class UNet(nn.Module):
         output width is tied to the decoder stage that follows.
 
         The names returned here are the canonical keys used by the channel-mask JSON, so this
-        method and `src.compression.channel_mask` share one naming convention.
+        method and `src.compression.mask_io` share one naming convention.
         """
         names = []
         for name, module in self.named_modules():
@@ -411,14 +411,87 @@ class UNet(nn.Module):
         """Build a NARROWED network matching a saved kept-channel mask (master §9).
 
         Contract: `mask` maps each name from `prunable_conv_names()` to the list of kept output
-        channel indices; the resulting per-block widths are the lengths of those lists.
+        channel indices; the resulting per-block widths are the lengths of those lists. Per
+        `src.compression.structured_pruning`'s block-level granularity (A37), a DoubleConv's two
+        conv names always carry the SAME list, so either can be read for that block's width.
 
         B, B' and C all call this with the SAME mask for a given ratio, which is what makes
-        their parameter and FLOP counts identical.
-
-        NOT YET IMPLEMENTED -- it lands in Phase 5 alongside `src.compression.l1_structured`,
-        which produces the mask. Implementing it now would mean inventing the mask's exact
-        per-layer semantics before the pruning code that defines them exists.
+        their parameter and FLOP counts identical. This builds only the correctly-SHAPED
+        skeleton (fresh-initialised weights) -- it does not transplant Model A's weights, which
+        is `src.compression.structured_pruning.apply_channel_mask`'s job. The intended use here is
+        the inverse direction: reconstructing the right shape so a SAVED pruned-base
+        checkpoint's `state_dict` can be loaded into it (master §9: "B/B'/C load the SAME
+        pruned base"), the same role `from_config` plays for the unpruned models.
         """
-        raise NotImplementedError(
-            "UNet.from_channel_mask lands in Phase 5 with src.compression.l1_structured")
+        model_cfg = cfg.get("model", cfg)
+        if model_cfg.get("architecture", "unet") != "unet":
+            raise ValueError(
+                f"architecture is FROZEN as plain 'unet' (master §7); "
+                f"got {model_cfg.get('architecture')!r}")
+        if model_cfg.get("final_activation", None) is not None:
+            raise ValueError(
+                "final_activation must be null: master §7 freezes the head as an "
+                "unactivated Conv2d")
+
+        base_encoder = tuple(model_cfg.get("encoder_channels", (64, 128, 256, 512)))
+        base_decoder = tuple(model_cfg.get("decoder_channels", (512, 256, 128, 64)))
+        n_stages = len(base_encoder)
+
+        def width(stage_idx: int, prefix_fmt: str) -> int:
+            name = f"{prefix_fmt.format(i=stage_idx)}.3"  # block's 2nd conv, see structured_pruning
+            if name not in mask:
+                raise KeyError(
+                    f"mask is missing {name!r} -- expected one entry per "
+                    f"UNet.prunable_conv_names() block for a {n_stages}-stage encoder")
+            return len(mask[name])
+
+        new_encoder = [width(i, "encoders.{i}.block") for i in range(n_stages)]
+        new_bottleneck = len(mask["bottleneck.block.3"])
+        new_decoder = [width(i, "decoders.{i}.conv.block") for i in range(len(base_decoder))]
+
+        return cls(
+            in_channels=model_cfg.get("in_channels", 1),
+            out_channels=model_cfg.get("out_channels", 1),
+            encoder_channels=new_encoder,
+            bottleneck_channels=new_bottleneck,
+            decoder_channels=new_decoder,
+            bilinear_upsample=model_cfg.get("bilinear_upsample", False),
+        )
+
+    @staticmethod
+    def _stage_count(state_dict: dict, prefix_fmt: str) -> int:
+        i = 0
+        while f"{prefix_fmt.format(i=i)}.weight" in state_dict:
+            i += 1
+        return i
+
+    @classmethod
+    def from_state_dict_shapes(cls, state_dict: dict) -> "UNet":
+        """Reconstruct a UNet skeleton whose widths are read DIRECTLY from a checkpoint's tensors.
+
+        [ASSUMPTION A40] Serving/evaluation code deliberately does NOT re-derive architecture
+        from `configs/pruning.yaml` plus a saved channel-mask JSON (`from_channel_mask`'s role
+        at TRAINING time, master §9). Those mask files are training-time artifacts that need
+        not be present -- or even at the same ratio -- wherever this is called; a checkpoint's
+        own weight tensors are fully self-describing. Reading widths off the actual saved
+        shapes is strictly more robust than re-deriving them from a possibly-absent side file,
+        and it cannot silently disagree with the checkpoint being loaded. Used by both
+        `backend/services/model_registry.py` (live inference) and
+        `src/evaluation/eval_runner.py` (offline test-set evaluation) -- one implementation,
+        not duplicated between them.
+        """
+        n_enc = cls._stage_count(state_dict, "encoders.{i}.block.0")
+        if n_enc == 0:
+            raise ValueError("state_dict has no encoders.*.block.0.weight -- not a UNet checkpoint")
+        encoder_channels = [int(state_dict[f"encoders.{i}.block.3.weight"].shape[0])
+                            for i in range(n_enc)]
+        bottleneck_channels = int(state_dict["bottleneck.block.3.weight"].shape[0])
+        n_dec = cls._stage_count(state_dict, "decoders.{i}.conv.block.0")
+        decoder_channels = [int(state_dict[f"decoders.{i}.conv.block.3.weight"].shape[0])
+                            for i in range(n_dec)]
+        bilinear = "decoders.0.up.1.weight" in state_dict
+        in_channels = int(state_dict["encoders.0.block.0.weight"].shape[1])
+        out_channels = int(state_dict["head.weight"].shape[0])
+        return cls(in_channels=in_channels, out_channels=out_channels,
+                  encoder_channels=encoder_channels, bottleneck_channels=bottleneck_channels,
+                  decoder_channels=decoder_channels, bilinear_upsample=bilinear)

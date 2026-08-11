@@ -1,0 +1,9 @@
+{
+  "ratio": 0.7,
+  "mask_hash": "1aa800c7774bc5dfbda3f564f60efc44cb912ea080b289738d3926ad75746d3a",
+  "mask_path": "C:\\Users\\Shakthi Vyas\\dcr_hemeshakthi\\results\\synthetic_validation\\phase7\\SYNTHETIC_phase7_channel_mask_ratio_0.7.json",
+  "params_before": 1942289,
+  "params_after": 174392,
+  "flops_before": 862060544,
+  "flops_after": 82100160
+}

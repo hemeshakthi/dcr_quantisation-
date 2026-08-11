@@ -36,6 +36,65 @@ from src.training.seed_manager import apply_run_determinism, seeds_for_run  # no
 from src.training.trainer import Trainer  # noqa: E402
 
 
+def _build_pruned_base(cfg: dict, pruning_cfg: dict, args: argparse.Namespace,
+                       train_loader) -> tuple["UNet", str]:
+    """Reconstruct B/B'/C's shared pruned-and-recalibrated starting point (master §9).
+
+    [ENGINEERING, Phase 7] Added because the original runner only ever built a FRESH
+    `UNet.from_config(...)` -- correct for Vanilla/A, but for B/B'/C that would silently train
+    an unpruned, full-size network mislabeled as the pruned one (exactly the "successful-looking
+    run with wrong results" failure mode `docs/kaggle_run_contract.md` opens by warning against).
+
+    Deterministic given (Model A's checkpoint, the shared mask file, the recalibration batch
+    stream): every one of B/B'/C calling this independently -- never sharing an in-memory
+    object, since each is its own single-job Kaggle subprocess (master §10,
+    docs/kaggle_run_contract.md §4) -- produces BIT-IDENTICAL starting weights. That is what
+    lets them stay crash-isolated while still PROVABLY sharing one pruned base, rather than
+    requiring a fragile shared intermediate checkpoint passed between jobs.
+
+    Returns:
+        (pruned_and_recalibrated_model, note) -- `note` is a human-readable summary folded into
+        the experiment-log row's `notes` field (mask hash, recalibration batch count and
+        order-fingerprint), so a drift is visible in the log itself.
+    """
+    import itertools
+
+    from torch.utils.data import DataLoader
+
+    from src.compression.bn_recalibration import recalibrate_batchnorm
+    from src.compression.mask_io import apply_mask_to_checkpoint
+    from src.datasets.dataset import CellSegmentationDataset, collate_batch
+
+    out_root = Path(args.output_root) if args.output_root else ROOT
+    source_checkpoint = out_root / pruning_cfg["source_checkpoint"]
+    mask_path = out_root / pruning_cfg["channel_mask"]
+
+    model, mask_hash = apply_mask_to_checkpoint(
+        mask_path=mask_path, checkpoint_path=source_checkpoint, model_cfg=cfg,
+        expected_hash=args.channel_mask_hash, map_location=args.device)
+
+    recal_cfg = pruning_cfg.get("bn_recalibration", {})
+    if not recal_cfg.get("enabled", True):
+        return model, f"pruned from {source_checkpoint} mask_hash={mask_hash[:12]}... (BN recalibration disabled)"
+
+    # UNAUGMENTED, UNSHUFFLED: master §9 requires "identical images/order" across B/B'/C.
+    # Reusing train_loader.dataset.frame (not the augmented, shuffled train_loader itself) keeps
+    # the row order identical to what this run's own train split resolved to, without coupling
+    # recalibration to the augmentation seed's random state.
+    recal_ds = CellSegmentationDataset(train_loader.dataset.frame, augmenter=None,
+                                       return_instances=False)
+    recal_loader = DataLoader(recal_ds, batch_size=cfg["training"]["batch_size"],
+                              shuffle=False, collate_fn=collate_batch)
+    num_batches = int(recal_cfg.get("num_batches", 1500))
+    record = recalibrate_batchnorm(
+        model, itertools.cycle(recal_loader), num_batches=num_batches,
+        device=args.device, momentum=recal_cfg.get("momentum"), reset_first=True)
+    note = (f"pruned from {source_checkpoint} mask_hash={mask_hash[:12]}... "
+           f"BN-recalibrated {record['n_batches']} batches "
+           f"(fingerprint {record['batch_order_fingerprint'][:12]}...)")
+    return model, note
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -112,7 +171,22 @@ def main(argv: list[str] | None = None) -> int:
               f"{len(train_eval_loader.dataset)} images, "
               f"gap threshold {cfg['training'].get('overfit_gap_threshold')}")
 
-    model = UNet.from_config(cfg, init_seed=seeds.model_init_seed)
+    pruning_cfg = cfg.get("pruning", {}) or {}
+    finetune_cfg = cfg.get("finetune", {}) or {}
+    pruned_base_note = ""
+    if pruning_cfg.get("enabled") and finetune_cfg.get("from_pruned_base"):
+        if not args.channel_mask_hash:
+            print("CONFIG VALIDATION FAILED:")
+            print("  ! --channel-mask-hash is required when pruning.enabled and "
+                  "finetune.from_pruned_base are both true (master §9): B/B'/C must each "
+                  "PROVE they loaded the identical mask, not merely assume it.")
+            return 2
+        print(f"\n  loading pruned base: {pruning_cfg['source_checkpoint']} "
+              f"pruned to ratio {pruning_cfg['ratio']}, mask {pruning_cfg['channel_mask']}")
+        model, pruned_base_note = _build_pruned_base(cfg, pruning_cfg, args, train_loader)
+        print(f"  {pruned_base_note}")
+    else:
+        model = UNet.from_config(cfg, init_seed=seeds.model_init_seed)
     loss_fn = build_loss_from_config(cfg)
 
     trainer = Trainer(model=model, loss_fn=loss_fn, train_loader=train_loader,
@@ -123,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
                       resume_from=args.resume_from,
                       train_eval_loader=train_eval_loader)
     summary = trainer.fit()
+    if pruned_base_note:
+        summary["notes"] = " | ".join(s for s in (summary.get("notes", ""), pruned_base_note) if s)
 
     record = build_run_record(run_id, cfg, summary, config_fingerprint=fp,
                               seeds=seeds.as_dict(), executed_on=args.executed_on)

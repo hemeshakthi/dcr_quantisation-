@@ -247,5 +247,6 @@ if failures:
 print("RESULT: PASS — Phase 4 verification complete.")
 print("=" * 78)
 print(f"Single frozen backbone, {n_params:,} parameters, raw-logit output.")
-print("UNet.from_channel_mask remains NotImplementedError -- it lands in Phase 5 with")
-print("src.compression.l1_structured, which defines the mask semantics it consumes.")
+print("UNet.from_channel_mask is implemented (backend-authoring phase) alongside")
+print("src.compression.structured_pruning, which defines the mask semantics it consumes --")
+print("see audit/verify_phase7.py and audit/verify_backend_integration.py.")
