@@ -42,11 +42,15 @@ Holm-Bonferroni tests the smallest p-value against alpha/m and progressively rel
 alpha/m is the MOST stringent threshold any test in the family faces -- a conservative
 planning bound, not the typical one.
 
+[ENGINEERING, Phase 8 -- A44] Moved from `docs/power_analysis.py` (this module is real analysis
+code with its own CLI, not documentation) to `src/evaluation/power_analysis.py`, the location
+Phase 8's own instruction specifies. Content and behaviour unchanged.
+
 Usage:
-    python docs/power_analysis.py --n_test 50      # low-curvature bin
-    python docs/power_analysis.py --n_test 12      # mid-curvature bin
-    python docs/power_analysis.py --n_test 36      # high-curvature bin
-    python docs/power_analysis.py --all-bins       # all three, side by side
+    python src/evaluation/power_analysis.py --n_test 50      # low-curvature bin
+    python src/evaluation/power_analysis.py --n_test 12      # mid-curvature bin
+    python src/evaluation/power_analysis.py --n_test 36      # high-curvature bin
+    python src/evaluation/power_analysis.py --all-bins       # all three, side by side
 """
 from __future__ import annotations
 

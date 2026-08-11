@@ -27,14 +27,37 @@ def append_per_image_metrics(rows: list[dict[str, Any]], path: str | Path) -> Pa
     """Append rows to a per-image metrics CSV, creating it with the canonical header.
 
     Validates that every row carries the identifying keys; a row without run_id/model/seed/
-    image_id cannot be paired later and is worthless.
+    image_id cannot be paired later and is worthless. Any PER_IMAGE_COLUMNS key a row omits is
+    written as empty rather than silently reordering or dropping columns, so the header stays
+    identical across every append.
     """
-    raise NotImplementedError
+    if not rows:
+        raise ValueError("no rows to append")
+    required_keys = ("run_id", "model", "seed", "image_id")
+    for i, r in enumerate(rows):
+        missing = [k for k in required_keys if r.get(k) in (None, "")]
+        if missing:
+            raise ValueError(
+                f"row {i} missing identifying key(s) {missing} -- cannot be paired later")
+
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    df_new = pd.DataFrame(rows)
+    for col in PER_IMAGE_COLUMNS:
+        if col not in df_new.columns:
+            df_new[col] = pd.NA
+    df_new = df_new[PER_IMAGE_COLUMNS]
+    write_header = not p.exists()
+    df_new.to_csv(p, mode="a", header=write_header, index=False)
+    return p
 
 
 def load_per_image_metrics(path: str | Path) -> pd.DataFrame:
     """Load one or more per-image metric CSVs into a single frame."""
-    raise NotImplementedError
+    if isinstance(path, (list, tuple)):
+        frames = [pd.read_csv(p) for p in path]
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=PER_IMAGE_COLUMNS)
+    return pd.read_csv(path)
 
 
 def join_curvature_bins(df: pd.DataFrame, curvature_csv: str | Path) -> pd.DataFrame:
@@ -43,7 +66,19 @@ def join_curvature_bins(df: pd.DataFrame, curvature_csv: str | Path) -> pd.DataF
     Raises if any metric row has no matching curvature row -- an unbinned image cannot be
     placed in the stratified analysis and must not be silently dropped.
     """
-    raise NotImplementedError
+    cb = pd.read_csv(curvature_csv)[["image_id", "bin", "curvature_score", "cell_size", "contrast"]]
+    cb = cb.rename(columns={"bin": "curvature_bin"})
+    base = df.drop(columns=["curvature_bin", "curvature_score", "cell_size", "contrast"],
+                   errors="ignore")
+    merged = base.merge(cb, on="image_id", how="left")
+    unmatched = merged[merged["curvature_bin"].isna()]
+    if len(unmatched):
+        ids = sorted(unmatched["image_id"].unique())
+        raise ValueError(
+            f"{len(unmatched)} metric row(s) have no matching curvature row for image_id(s): "
+            f"{ids[:5]}{'...' if len(ids) > 5 else ''} -- an unbinned image cannot be placed "
+            f"in the stratified analysis")
+    return merged
 
 
 def pair_for_comparison(df: pd.DataFrame, model_a: str, model_b: str,
@@ -59,7 +94,21 @@ def pair_for_comparison(df: pd.DataFrame, model_a: str, model_b: str,
         seed: a specific seed, or None to average across the 3 seeds first (master §4 states
             its criteria on the mean over 3 seeds).
     """
-    raise NotImplementedError
+    sub = df[df["curvature_bin"] == bin_name]
+    if "pruning_ratio" in sub.columns and ratio is not None:
+        sub = sub[sub["pruning_ratio"] == ratio]
+
+    def _one(model_name: str) -> pd.Series:
+        s = sub[sub["model"] == model_name]
+        if seed is not None:
+            s = s[s["seed"] == seed]
+        return s.groupby("image_id")[metric].mean()
+
+    a = _one(model_a).rename(f"{metric}_{model_a}")
+    b = _one(model_b).rename(f"{metric}_{model_b}")
+    merged = pd.concat([a, b], axis=1, join="inner").reset_index()
+    merged["diff"] = merged[f"{metric}_{model_a}"] - merged[f"{metric}_{model_b}"]
+    return merged
 
 
 def assert_no_identical_predictions(df: pd.DataFrame) -> list[str]:
@@ -72,4 +121,23 @@ def assert_no_identical_predictions(df: pd.DataFrame) -> list[str]:
     Returns:
         Human-readable descriptions of any suspicious pairs; empty means all models differ.
     """
-    raise NotImplementedError
+    metric_cols = [c for c in ("dice", "boundary_f1_2px", "boundary_f1_5px", "hd95")
+                  if c in df.columns]
+    problems: list[str] = []
+    if not metric_cols or "model" not in df.columns:
+        return problems
+    models = sorted(df["model"].dropna().unique())
+    for i in range(len(models)):
+        for j in range(i + 1, len(models)):
+            ma, mb = models[i], models[j]
+            a = df[df["model"] == ma].set_index("image_id")[metric_cols]
+            b = df[df["model"] == mb].set_index("image_id")[metric_cols]
+            common = a.index.intersection(b.index)
+            if len(common) == 0:
+                continue
+            a_c, b_c = a.loc[common].sort_index(), b.loc[common].sort_index()
+            if a_c.equals(b_c):
+                problems.append(
+                    f"{ma} and {mb} have BYTE-IDENTICAL metrics on all {len(common)} shared "
+                    f"images -- Golden Rule 2 violation, investigate before trusting this run")
+    return problems

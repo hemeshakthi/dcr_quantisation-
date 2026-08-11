@@ -15,7 +15,6 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "docs"))
 
 failures = []
 
@@ -32,7 +31,8 @@ print("=" * 78)
 print("STATISTICAL DESIGN VERIFICATION (pre-Phase-3)")
 print("=" * 78)
 
-check("docs/power_analysis.py exists", (ROOT / "docs" / "power_analysis.py").is_file())
+check("src/evaluation/power_analysis.py exists",
+      (ROOT / "src" / "evaluation" / "power_analysis.py").is_file())
 
 # ---- 1. re-derive the bin n from the real curvature table -------------------------
 cb = pd.read_csv(ROOT / "data" / "curvature" / "curvature_bins.csv")
@@ -43,14 +43,15 @@ check(f"test-bin occupancy re-derived from curvature_bins.csv == {expected} "
 
 # ---- 2. the power analysis runs for each bin --------------------------------------
 for n in (50, 12, 36):
-    r = subprocess.run([sys.executable, str(ROOT / "docs" / "power_analysis.py"),
+    r = subprocess.run([sys.executable,
+                        str(ROOT / "src" / "evaluation" / "power_analysis.py"),
                         "--n_test", str(n)],
                        capture_output=True, text=True, cwd=ROOT)
     check(f"power_analysis.py runs for n={n} (exit {r.returncode})", r.returncode == 0)
     check(f"  n={n} output reports a verdict", "VERDICT:" in r.stdout)
 
 # ---- 3. recompute the power numbers and compare with the documented table ---------
-from power_analysis import wilcoxon_power, mde, n_required  # noqa: E402
+from src.evaluation.power_analysis import wilcoxon_power, mde, n_required  # noqa: E402
 
 sc = (ROOT / "docs" / "success_criteria.md").read_text(encoding="utf-8")
 

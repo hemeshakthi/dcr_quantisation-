@@ -54,7 +54,7 @@ the high-curvature bin (n=36) vs low-curvature bin (n=50) comparison, which was
 always the theoretically central contrast. This is a disclosed limitation, not a
 retroactive weakening of the hypothesis.
 
-### Measured power at the actual n (`docs/power_analysis.py`, master §6)
+### Measured power at the actual n (`src/evaluation/power_analysis.py`, master §6)
 
 Paired design; Wilcoxon signed-rank primary (ARE = 3/π ≈ 0.955 vs the paired t-test); Cohen's d
 is for PAIRED differences. Nominal α = 0.05 two-sided; "Holm" = 0.05/16, the most stringent

@@ -1,0 +1,48 @@
+{
+  "phase": 8,
+  "synthetic": true,
+  "warning": "All mask cases and statistical-test inputs are SYNTHETIC, constructed with known-by-construction answers. This report verifies metric/statistics CORRECTNESS, not real model quality.",
+  "cases": {
+    "perfect_match": {
+      "dice": 1.0,
+      "boundary_f1_2px": 1.0,
+      "boundary_precision_2px": 1.0,
+      "boundary_recall_2px": 1.0,
+      "boundary_f1_5px": 1.0,
+      "boundary_precision_5px": 1.0,
+      "boundary_recall_5px": 1.0,
+      "hd95": 0.0,
+      "n_instances_pred": 1,
+      "n_instances_gt": 1
+    },
+    "disjoint": {
+      "dice": 1.2499999843750004e-08,
+      "boundary_f1_2px": 0.0,
+      "boundary_precision_2px": 0.0,
+      "boundary_recall_2px": 0.0,
+      "boundary_f1_5px": 0.0,
+      "boundary_precision_5px": 0.0,
+      "boundary_recall_5px": 0.0,
+      "hd95": 97.59098319004681,
+      "n_instances_pred": 1,
+      "n_instances_gt": 1
+    },
+    "corner_damage": {
+      "dice": 0.952879581250514,
+      "boundary_f1_2px": 0.8724489795918368,
+      "boundary_precision_2px": 0.8724489795918368,
+      "boundary_recall_2px": 0.8724489795918368,
+      "boundary_f1_5px": 0.9030612244897959,
+      "boundary_precision_5px": 0.9030612244897959,
+      "boundary_recall_5px": 0.9030612244897959,
+      "hd95": 10.0,
+      "n_instances_pred": 1,
+      "n_instances_gt": 1
+    }
+  },
+  "confirmatory_family_size": 16,
+  "curvature_bins_csv_sha256": "e7c09383fe7b7c4aad05eb4dbcf420ee87743970f6463cade3d8ca797242a242",
+  "n_failed": 0,
+  "n_warnings": 0,
+  "failures": []
+}
