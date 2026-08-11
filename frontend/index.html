@@ -25,6 +25,8 @@
     <span id="connection-detail"></span>
   </div>
 
+  <div id="models-status" class="models-status" hidden role="status"></div>
+
   <section class="controls">
     <label for="image-select">Test image (by curvature bin):</label>
     <select id="image-select" disabled aria-describedby="image-meta">
@@ -41,10 +43,15 @@
       </div>
     </figure>
     <figure class="panel">
-      <figcaption>Ground truth</figcaption>
+      <figcaption>Ground truth (contour overlay)</figcaption>
       <div class="image-frame">
-        <img id="gt-img" alt="Ground truth mask">
-        <svg id="gt-contour-svg" class="contour-svg" viewBox="0 0 1024 1024" preserveAspectRatio="xMidYMid meet"></svg>
+        <img id="gt-overlay-img" alt="Original image with ground-truth contour overlay">
+      </div>
+    </figure>
+    <figure class="panel">
+      <figcaption>Ground truth (mask)</figcaption>
+      <div class="image-frame">
+        <img id="gt-mask-img" alt="Ground truth binary mask">
       </div>
     </figure>
   </section>
@@ -64,15 +71,19 @@
         <h2 class="model-label"></h2>
         <p class="model-static-meta"></p>
       </header>
-      <div class="image-frame">
-        <img class="pred-img" alt="Model prediction mask">
-        <canvas class="error-canvas"></canvas>
-        <svg class="contour-svg" viewBox="0 0 1024 1024" preserveAspectRatio="xMidYMid meet"></svg>
-      </div>
-      <div class="error-toggle">
-        <label><input type="checkbox" class="toggle-fp" checked> FP (solid)</label>
-        <label><input type="checkbox" class="toggle-fn" checked> FN (hatched)</label>
-        <label><input type="checkbox" class="toggle-contour" checked> contour</label>
+      <div class="thumb-trio">
+        <figure class="panel">
+          <figcaption>Prediction</figcaption>
+          <div class="image-frame"><img class="pred-img" alt="Model prediction mask"></div>
+        </figure>
+        <figure class="panel">
+          <figcaption>Overlay</figcaption>
+          <div class="image-frame"><img class="overlay-img" alt="Original image with this model's contour overlay"></div>
+        </figure>
+        <figure class="panel">
+          <figcaption>Error map</figcaption>
+          <div class="image-frame"><img class="error-img" alt="Error map: false positives solid, false negatives hatched"></div>
+        </figure>
       </div>
       <dl class="metrics">
         <div class="metric-row" data-metric="dice">

@@ -1,142 +1,135 @@
-# Backend API Contract — binding on Phase 11
+# Backend API Contract — v2 (implemented)
 
-**Written before the backend exists.** The frontend (this phase) is built as a strict consumer
-of this contract via `fetch()`; Phase 11 implements a FastAPI backend that satisfies it exactly.
-This is the same pattern as `docs/kaggle_run_contract.md`: define the interface precisely first,
-so the two sides can be built independently and still agree.
+**Supersedes the v1 draft** (5 endpoints: health/models/images/case/selfcheck), written when this
+was still a forward-looking spec for an unbuilt backend. The backend-authoring phase gave an
+explicit, more specific 3-endpoint shape (`GET /images`, `POST /infer`, `GET /health`) and asked
+for **server-rendered** overlays and error maps, superseding v1's client-side error-map decision.
+This document describes what `backend/` actually implements; `frontend/` was updated to match.
 
-Master §14, Golden Rules 1–2 govern every endpoint below:
+Master §14, Golden Rules 1–2 still govern every endpoint below:
 - **LIVE inference on real checkpoints. No placeholders/hardcoded/fake/mock**, anywhere.
 - **Two identical model outputs is a BUG**, never an acceptable response.
-- If C doesn't beat B, the API returns the real numbers regardless — no endpoint may adjust,
-  round favourably, or omit a result because it is unflattering.
+- If C doesn't beat B, the API returns the real numbers regardless.
 
 ---
 
-## 0. Scope decisions this contract fixes (not yet decided by any earlier phase)
+## 0. Scope decisions
 
-### A35 — Which checkpoint per model (which seed, which ratio) [ENGINEERING/ASSUMPTION]
-Master §14 says "backend loads 5 real checkpoints (Vanilla, A, B, B′, C at **0.5**)" — the
-primary pruning ratio (master §9), one checkpoint each, not all 3×2×3=18 compressed runs. Which
-of the 3 seeds represents each model in the UI is otherwise unspecified. **Decision: seed 1
-(`model_init_seed=1`)'s `best.pt` for every model**, i.e. `checkpoints/<run_name>_seed1/best.pt`
-where `run_name` ∈ `{vanilla, A_dcr, B_pruned, B_prime_generic, C_pruned_dcr}` (matching
-`configs/model_*.yaml`'s `run.name`, and `run_name + "_seed1"` matching
-`experiments/multi_seed_train.py`'s run_id convention). `best.pt` (not `final.pt`) because it is
-selected on val Boundary F1 (A31) — the checkpoint that best represents the model's boundary
-performance, matching what the demo is trying to show. Logged in
-`docs/implementation_assumptions.md` A35; **not** a statistical claim — the paper's confirmatory
-numbers (Phase 8+) use all 3 seeds properly, this is a single illustrative instance for the UI.
+### A35 — Which checkpoint per model (unchanged from v1)
+Every model column loads `checkpoints/<run_name>_seed1/best.pt` (seed 1, best-on-val-Boundary-F1
+per A31). `run_name` ∈ `{vanilla, A_dcr, B_pruned, B_prime_generic, C_pruned_dcr}`. B/B′/C are at
+the primary ratio 0.5 (master §14). See `docs/implementation_assumptions.md` A35.
 
-### Images shown are TEST-split only
-`GET /api/images` and `GET /api/case/{image_id}` only ever serve images from
-`data/splits/test.csv`. Showing a training image would demonstrate memorisation, not
-generalisation — dishonest for a tool whose entire purpose is showing real behaviour.
+### A39 — Error maps and contour overlays are now SERVER-rendered, not client-side
+v1 (frontend phase) decided error maps would be computed client-side from two fetched masks, to
+avoid a second network round trip. **This backend phase's instruction explicitly lists "error
+maps base64" as part of `/infer`'s response**, overriding that decision. The backend now uses
+`src/visualization/contours.py::draw_contour` (line-style overlay) and `::error_map` (solid
+FP / hatched FN) — both implemented for real in this phase — so the exact same B&W rendering
+logic is available to Phase 13's static paper figures and to this live API. The frontend was
+simplified accordingly: it now displays three ready-made `<img>` elements per model
+(prediction / overlay / error map) instead of doing canvas pixel comparison and SVG polyline
+construction itself. See A39 in `docs/implementation_assumptions.md`.
 
-### Startup self-check timing
-"Startup" self-check (master §14) means computed **once, at backend startup**, after all models
-are loaded, and cached. `GET /api/selfcheck` returns the cached result (fast — the frontend calls
-it on every page load, and re-running inference on every page load would be wasteful and is not
-what "startup" implies).
+### Lazy, cached model loading
+Models are loaded from disk **lazily on first request**, not blocking backend startup — with a
+CPU-only host and no checkpoints necessarily present at boot, blocking startup on 5 model loads
+(or worse, on a load that will simply fail because Kaggle hasn't run yet) would make the server
+unable to even answer `/api/health`. Each successfully loaded model is cached in the
+`ModelRegistry` for the process lifetime. The self-check probe (§1 below) runs once, lazily, on
+the **first** `/api/health` call (which triggers loading whatever checkpoints exist), and its
+result is cached from then on — "startup self-check" is read as "compute once, not per request",
+matching v1's reasoning; it just cannot literally block process startup on a CPU host where a
+checkpoint may not even exist yet.
 
-### Byte-identical comparison is on PRE-THRESHOLD probabilities
-Matching `configs/evaluation.yaml`'s `identical_output_check.compare_pre_threshold: true`: the
-self-check compares `sigmoid(logits)` float32 arrays, not the binarised masks. Two different
-models can legitimately binarise to the same mask on an easy image by coincidence; that is not
-model collapse. Two models producing bit-identical *probabilities* on a real (non-degenerate)
-input essentially never happens unless something is structurally wrong (shared weights, a
-training bug, or a copy-paste checkpoint bug) — which is exactly the failure master §0b names.
-`identical` = `np.array_equal(probs_a, probs_b)` (atol 0, matching evaluation.yaml).
+### Degraded mode is not fabrication
+If a checkpoint is missing or fails to load, that model is excluded from `models_loaded` and
+listed in `models_unavailable` with the real reason. `/api/infer` returns results only for
+models that are actually loaded (never a fabricated entry for a missing one). This is the
+project's current REAL state (`checkpoints/` is empty until Kaggle Phase 6-RUN and Phase 9
+pruning both run) — the backend must report that honestly, not synthesize a fifth column.
 
 ---
 
 ## 1. `GET /api/health`
 
-Liveness + model-load status. Called by the frontend before anything else; if this fails, the UI
-shows a connection-error state (not a blank screen pretending to be empty data).
+Triggers lazy loading of every expected checkpoint (if not already cached) and runs the
+collapse probe once. Merges v1's `/api/health` and `/api/selfcheck` into one call, and also
+carries the static per-model metadata the frontend needs to build its UI shell (v1's
+`/api/models` is dropped as a separate endpoint — its content is folded in here, since building
+it requires the same loaded-model state health already computes).
 
 ```jsonc
 {
-  "status": "ok",                       // "ok" | "degraded"
-  "models_loaded": ["vanilla", "A", "B", "B_prime", "C"],
-  "models_unavailable": [],             // e.g. ["C"] if a checkpoint failed to load
-  "unavailable_reasons": {},            // {"C": "checkpoint file not found at ..."}
-  "test_images_available": 98,
-  "started_at_utc": "2026-08-09T12:00:00Z"
-}
-```
-
-If any expected model failed to load, it is **excluded from every other endpoint's responses**,
-never faked. `status` becomes `"degraded"` and `models_unavailable` names which. The frontend
-must render this honestly (a visibly missing column), not silently hide the gap.
-
----
-
-## 2. `GET /api/models`
-
-Static per-model metadata, computed once at startup from the real loaded checkpoints (never
-hardcoded — `params_count` from `model.count_parameters()`, `model_size_bytes` from
-`Path(checkpoint_path).stat().st_size`, `checkpoint_hash` from `checkpointing.checkpoint_hash()`).
-
-```jsonc
-{
-  "models": [
+  "status": "ok",                          // "ok" (all 5 loaded, no collapse) | "degraded"
+  "models_loaded": ["vanilla", "A"],        // whichever of the 5 actually loaded
+  "models_unavailable": ["B", "B_prime", "C"],
+  "unavailable_reasons": {
+    "B": "checkpoint not found at checkpoints/B_pruned_seed1/best.pt"
+  },
+  "models": [                               // static metadata, ONLY for models_loaded
     {
-      "model_id": "vanilla",            // one of: vanilla | A | B | B_prime | C
-      "label": "Vanilla",
-      "is_reference": false,            // true only for "A" -- relative bars are computed vs A
-      "line_style": "dotted",           // solid | dotted | dashed | dashdot | longdash | solid_thick
-                                         // -- matches src/visualization/contours.py::LINE_STYLES exactly
-      "pruning_ratio": null,            // null for vanilla/A; 0.5 for B/B_prime/C
-      "params_count": 31036481,
-      "model_size_bytes": 124345872,
-      "checkpoint_hash": "8f2a...c3",
-      "checkpoint_path": "checkpoints/vanilla_seed1/best.pt",
+      "model_id": "vanilla", "label": "Vanilla", "is_reference": false,
+      "line_style": "dotted", "pruning_ratio": null,
+      "params_count": 31036481, "model_size_bytes": 124345872,
+      "checkpoint_hash": "8f2a...c3", "checkpoint_path": "checkpoints/vanilla_seed1/best.pt",
       "seed": 1
     }
-    // ... A, B, B_prime, C
-  ]
+    // ...
+  ],
+  "collapse_check": {
+    "probe_image_id": "...",
+    "collapsed": false,
+    "pairs": [
+      {"model_a": "vanilla", "model_b": "A", "identical": false, "mean_abs_diff": 0.1342}
+      // all C(n,2) pairs among models_loaded; empty list if fewer than 2 models loaded
+    ]
+  },
+  "test_images_available": 98
 }
 ```
 
-`is_reference: true` on `"A"` is what tells the frontend which column's numbers are the
-denominator for the relative bars (master §14: "Metrics as relative bars vs Model A").
+`collapse_check.collapsed = true` is what the frontend's red-free "MODEL COLLAPSE DETECTED"
+banner (A36) keys off. Comparison is on **pre-threshold sigmoid probabilities**
+(`np.array_equal`, atol 0), matching `configs/evaluation.yaml`'s
+`identical_output_check.compare_pre_threshold: true` — unchanged from v1.
 
 ---
 
-## 3. `GET /api/images`
+## 2. `GET /api/images`
 
-For the dropdown. Test-split only, labelled by curvature bin (master §14: "dropdown labeled by
-curvature bin, default high-curvature").
+Unchanged from v1. Test-split only, labelled by curvature bin.
 
 ```jsonc
 {
-  "default_image_id": "stardist_tcell/.../Training_source_....tif",  // a HIGH-bin image, chosen
-                                                                       // deterministically (seed 42,
-                                                                       // matching master §13's convention)
+  "default_image_id": "...",   // a HIGH-bin image, deterministic (seed 42, master §13 convention)
   "images": [
-    {
-      "image_id": "...",
-      "dataset": "stardist_tcell",
-      "curvature_bin": "high",          // low | mid | high
-      "curvature_score": 0.2134
-    }
-    // ... every image in data/splits/test.csv, all three bins
+    {"image_id": "...", "dataset": "stardist_tcell", "curvature_bin": "high", "curvature_score": 0.2134}
+    // every image in data/splits/test.csv
   ]
 }
 ```
 
-The frontend groups this list into three `<optgroup>`s (Low / Mid / High curvature) and
-pre-selects `default_image_id`.
-
 ---
 
-## 4. `GET /api/case/{image_id}`
+## 3. `POST /api/infer`
 
-The primary endpoint: everything needed to render one full comparison screen, in one call —
-original image, ground truth, and per-model prediction + metrics for every loaded model. Every
-number in this response comes from a live forward pass computed for THIS request (or served from
-a per-`(image_id, model_id)` cache populated by a real forward pass — never a fabricated value).
+Request body:
+```json
+{ "image_id": "stardist_tcell/.../foo.tif" }
+```
+
+The primary endpoint. Runs live inference for every currently-loaded model on the requested
+image (cached per `(image_id, model_id)` after the first real forward pass — the cache stores a
+genuine computed result, it is never pre-seeded or fabricated) and returns everything needed to
+render one full comparison screen.
+
+**Every value in the example response below is an ILLUSTRATIVE PLACEHOLDER showing the JSON
+SHAPE only** (this contract was written before any model was trained) **-- not a real measured
+result.** The live values are computed for real by `src/metrics/segmentation.py` once real
+checkpoints exist; see `audit/verify_backend_integration.py` for genuinely computed (if tiny/
+synthetic-fixture) example numbers, and `docs/synthetic_validation_manifest.md` for the full
+inventory of every synthetic artifact in this repo.
 
 ```jsonc
 {
@@ -146,110 +139,52 @@ a per-`(image_id, model_id)` cache populated by a real forward pass — never a 
   "curvature_score": 0.2134,
   "cell_size": 331.3,
   "contrast": 0.42,
-  "original_png_base64": "iVBORw0KG...",     // 8-bit greyscale PNG, percentile-normalised (A20)
+  "original_png_base64": "iVBORw0KG...",
   "ground_truth": {
-    "mask_png_base64": "iVBORw0KG...",       // 1-bit-equivalent (0/255) greyscale PNG
-    "contours": [[[x, y], [x, y], ...], ...] // one array of [x,y] points per connected boundary
+    "mask_png_base64": "iVBORw0KG...",
+    "overlay_png_base64": "iVBORw0KG..."   // original + GT contour (style "solid"), server-rendered
   },
   "models": [
     {
       "model_id": "vanilla",
-      "prediction": {
-        "mask_png_base64": "iVBORw0KG...",
-        "contours": [[[x, y], ...], ...]
-      },
+      "prediction_mask_png_base64": "iVBORw0KG...",
+      "overlay_png_base64": "iVBORw0KG...",     // original + this model's contour (its own line_style)
+      "error_map_png_base64": "iVBORw0KG...",   // FP solid / FN hatched vs ground truth, B&W
       "metrics": {
-        "dice": 0.8123,
-        "boundary_f1_2px": 0.5511,
-        "boundary_f1_5px": 0.7820,
-        "hd95": 12.34                        // null (JSON) if undefined -- see below
-      }
+        "dice": 0.8123, "boundary_f1_2px": 0.5511, "boundary_f1_5px": 0.7820,
+        "hd95": 12.34                            // JSON null if undefined (either mask empty)
+      },
+      "model_size_bytes": 124345872,
+      "params_count": 31036481,
+      "pruning_ratio": null
     }
-    // ... A, B, B_prime, C -- only models NOT in models_unavailable
+    // ... one entry per model in models_loaded (§1) at call time
   ]
 }
 ```
 
-**Metrics are computed with the exact functions already implemented in
-`src/metrics/segmentation.py`** (`dice_score`, `boundary_f1`, `hd95`) — the SAME code path used
-for the study's own per-image tables (`src/metrics/per_image.py`), so a number shown in the UI
-and a number in a results table can never silently disagree by using two different
-implementations. `hd95` is JSON `null` (not `0` or `NaN`-as-string) when either mask is empty,
-matching `segmentation.py`'s own documented NaN convention — the frontend renders this as "—",
-never as a fabricated zero (a zero would misleadingly read as a perfect score).
+**Metrics use the exact functions in `src/metrics/segmentation.py`** (`dice_score`,
+`boundary_f1`, `hd95`) — the same code path as the study's own per-image tables, so a number
+shown here and a number in a results table can never silently disagree.
 
-**Contours** are vector polygons (pixel coordinates), not raster images, extracted server-side
-(`cv2.findContours` + `cv2.approxPolyDP` to bound payload size is the expected Phase 11
-implementation — a *new* function, since `src/visualization/contours.py`'s existing
-`draw_contour`/`overlay_multiple_contours` are raster-oriented for the static paper figures,
-Phase 13, a different consumer). Vector contours let the frontend render each model with a truly
-distinct SVG `stroke-dasharray` — a real line-style difference, not a colour difference — and
-toggle any one model's contour on/off without re-fetching.
-
-**Error maps are NOT computed server-side.** The frontend derives FP/FN client-side from
-`prediction.mask_png_base64` vs `ground_truth.mask_png_base64` (§6 below) — both real, already
-fetched. This keeps the contract smaller and the error map trivially re-toggleable without a
-network round trip, while remaining a live computation on real model output, not a fabrication.
+**Overlays and error maps use `src/visualization/contours.py`** (`draw_contour`, `error_map`),
+implemented for real this phase — see A39. `curvature_bin` is echoed per top-level response
+(image property); `pruning_ratio`/`model_size_bytes`/`params_count` are per-model (echoed from
+`/api/health`'s static metadata, so a client that only ever calls `/infer` still has them).
 
 ---
 
-## 5. `GET /api/selfcheck`
+## 4. Error responses
 
-The master §14 startup self-check, cached from backend-startup inference (see §0).
-
-```jsonc
-{
-  "probe_image_id": "...",              // fixed, deterministic -- same probe every startup
-  "computed_at_utc": "2026-08-09T12:00:03Z",
-  "collapsed": false,
-  "pairs": [
-    {"model_a": "vanilla", "model_b": "A", "identical": false, "mean_abs_diff": 0.1342},
-    {"model_a": "vanilla", "model_b": "B", "identical": false, "mean_abs_diff": 0.0981}
-    // ... all C(n,2) pairs among the models that actually loaded
-  ]
-}
-```
-
-`collapsed = any(pair.identical for pair in pairs)`. The frontend polls this once on page load
-and renders the red **"MODEL COLLAPSE DETECTED"** banner, naming the colliding pair(s) by label,
-whenever `collapsed` is `true`. This is not a soft warning the user can dismiss into irrelevance —
-master's own account is that the previous attempt at this project failed exactly this way.
+Unknown `image_id`: HTTP 404, `{"error": "image_id '...' not found in the test split"}`.
+Inference failure: HTTP 500, `{"error": "..."}`. Never a 200 with a fabricated/default body.
 
 ---
 
-## 6. Client-side error-map algorithm (frontend responsibility, specified here for Phase 11 parity)
+## 5. What the backend must NOT do
 
-Given `pred` and `gt`, both decoded to 0/255 pixel arrays via `<canvas>.getImageData`:
-
-```
-for each pixel:
-    pred=255, gt=0   -> false positive -> SOLID fill
-    pred=0,   gt=255 -> false negative -> HATCHED fill
-    otherwise        -> no fill (correct)
-```
-
-Rendered as two separate binary layers (`<canvas>` alpha masks), each independently toggleable,
-composited over the greyscale image. Solid = filled black at reduced opacity; hatched = a
-repeating diagonal-line pattern (CSS/canvas `repeating-linear-gradient`-equivalent), never colour
-— master §14's "solid (FP) vs hatched (FN)" is a fill-pattern distinction, not a hue distinction.
-
----
-
-## 7. Error responses
-
-Any endpoint, on a bad `image_id` or `model_id`: HTTP 404,
-`{"error": "image_id '...' not found in the test split"}`. On an internal failure during
-inference: HTTP 500, `{"error": "..."}` — never a 200 with a fabricated/default body. The
-frontend renders fetch failures as a visible error state per panel, never as silently blank or
-zeroed metrics (which would be indistinguishable from a real score of 0).
-
----
-
-## 8. What Phase 11 must NOT do
-
-- Must not pre-compute and hardcode a static JSON fixture "for now" — every response is a live
-  call into the loaded PyTorch models.
-- Must not silently substitute one model's output for another's if a checkpoint fails to load —
-  exclude it from `models`/`models_unavailable` instead (§1).
-- Must not skip the startup self-check "to save time" — it is the one thing standing between this
-  project and repeating its predecessor's exact failure mode.
+- Must not hardcode a static JSON fixture "for now" — every response is a live call into the
+  loaded PyTorch models via `InferenceService`.
+- Must not block startup waiting for checkpoints that may not exist yet (lazy load, §0).
+- Must not silently substitute one model's output for another's if a checkpoint fails to load.
+- Must not skip the collapse probe "to save time".

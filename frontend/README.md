@@ -2,26 +2,31 @@
 
 Plain HTML/CSS/vanilla JS. No build step, no framework, no `npm install`. This is a deliberate
 choice, not an oversight: Node/npm are available on the dev machine, but every other part of
-this project is pure Python with no JS toolchain anywhere, the Phase 11 backend serves static
-files directly from FastAPI, and unbundled source is what makes `audit/verify_frontend.py`'s
-grep-based checks ("no hardcoded metric values", "no color in CSS") meaningful — a minified
-bundle would defeat them.
+this project is pure Python with no JS toolchain anywhere, `backend/` (the FastAPI app) serves
+static files directly, and unbundled source is what makes `audit/verify_frontend.py`'s grep-based
+checks ("no hardcoded metric values", "no color in CSS") meaningful — a minified bundle would
+defeat them.
 
 ## How it's served
 
-Phase 11's FastAPI backend mounts this directory as static files (e.g.
-`app.mount("/", StaticFiles(directory="frontend", html=True))`) so the page and the `/api/*`
-endpoints are same-origin and `api.js`'s default `BASE = ""` just works. For local development
-against a backend on a different origin, set `window.DCR_API_BASE` before the scripts load:
+`backend/main.py` mounts this directory as static files
+(`app.mount("/", StaticFiles(directory="frontend", html=True))`) so the page and the `/api/*`
+endpoints are same-origin and `api.js`'s default `BASE = ""` just works:
+
+```
+uvicorn backend.main:app --reload
+```
+
+For local development against a backend on a different origin, set `window.DCR_API_BASE` before
+the scripts load:
 
 ```html
 <script>window.DCR_API_BASE = "http://localhost:8000";</script>
 <script src="api.js"></script>
 ```
 
-Until Phase 11 exists, opening `index.html` directly will show the connection-error state —
-correctly, since there is no backend yet. That is expected: this phase defines the frontend and
-the exact contract (`docs/api_contract.md`) it calls; wiring it to real inference is Phase 11.
+Opening `index.html` directly (no backend running) shows the connection-error state — correctly,
+since there is nothing to fetch from.
 
 ## Files
 
@@ -29,23 +34,33 @@ the exact contract (`docs/api_contract.md`) it calls; wiring it to real inferenc
 |---|---|
 | `index.html` | structure; a `<template>` for the per-model card, cloned once per loaded model |
 | `style.css` | grayscale-only design system (CSS custom properties, all shades of grey) |
-| `api.js` | thin `fetch` wrapper matching `docs/api_contract.md` exactly; no fallback data |
-| `app.js` | orchestration: dropdown, contours (SVG), error maps (canvas), relative bars, self-check banner, the honest "story" summary |
+| `api.js` | thin `fetch` wrapper matching `docs/api_contract.md`'s 3 endpoints exactly; no fallback data |
+| `app.js` | orchestration: dropdown, placing server-rendered images, relative bars, collapse banner, degraded-mode notice, the honest "story" summary |
 
 ## Design decisions worth knowing about
 
-- **The collapse banner is not red.** The task that requested this UI said "red ... banner",
-  but master §14 freezes the entire UI as black-and-white, and this same task's own verification
-  step requires no color in CSS. Those conflict; the FROZEN spec wins. Urgency is instead
-  conveyed by inversion (black background / white text), a pulsing border, bold oversized type,
-  and a `⚠` glyph — see the comment at the top of `style.css`.
-- **Error maps are computed client-side**, from the two mask PNGs the case endpoint already
-  returns, per `docs/api_contract.md` §6 — not a separate backend endpoint. FP is a dense solid
-  fill; FN is a genuine pixel-level hatch pattern (only pixels where `(x+y) % 8 < 3` are painted),
-  computed once per model per image load and redrawn (not recomputed) on toggle.
-- **Contours are vector, not raster** — SVG `<polyline>` elements with `stroke-dasharray`
-  matching `src/visualization/contours.py::LINE_STYLES` by name, so line style can never drift
-  between the two.
+- **Overlays, prediction masks and error maps are SERVER-RENDERED PNGs (A39).** An earlier draft
+  of this frontend computed error maps client-side (canvas pixel comparison against two fetched
+  mask images) and drew contours as client-side SVG `<polyline>` elements. The backend-authoring
+  phase's instruction explicitly listed "error maps base64" as part of `POST /api/infer`'s
+  response, which requires server-side rendering — so `app.js` now just assigns
+  `overlay_png_base64` / `error_map_png_base64` / `prediction_mask_png_base64` to `<img src>`.
+  This is a genuine simplification: no canvas pixel loop, no SVG polyline construction, no
+  `DASH_ARRAY`/`STROKE_WIDTH` constants to keep in sync with the backend. The rendering itself
+  lives in `src/visualization/contours.py` (`draw_contour`, `error_map`) — the SAME functions
+  Phase 13's static paper figures use, so the live demo and the paper cannot visually disagree.
+- **The collapse banner is not red.** An earlier task that requested this UI said "red ...
+  banner", but master §14 freezes the entire UI as black-and-white, and that same task's own
+  verification step required no color in CSS. Those conflict; the FROZEN spec wins. Urgency is
+  instead conveyed by inversion (black background / white text), a pulsing border, bold oversized
+  type, and a `⚠` glyph — see the comment at the top of `style.css`.
+- **A "models not loaded" notice is shown honestly, not hidden.** The current real repo state is
+  0/5 trained checkpoints (Kaggle training has not yet produced any) — `app.js::renderModelsStatus`
+  reads `/api/health`'s `models_unavailable`/`unavailable_reasons` and states plainly which
+  checkpoints are missing and why, rather than silently rendering an empty model-cards grid that
+  would look like a bug (Golden Rule 4: null/negative state must be reported, not suppressed).
+  Ground truth and the original image still render even with zero models loaded, since
+  `POST /api/infer` returns those regardless of `models_loaded`.
 - **Relative bars encode raw magnitude honestly**: bar length is the true `value / referenceValue`
   ratio (capped for display, never silently inverted), and a `worse-than-a` hatched fill pattern
   — computed per-metric via `HIGHER_IS_BETTER`, since HD95 is lower-is-better while Dice/Boundary
@@ -57,7 +72,8 @@ the exact contract (`docs/api_contract.md`) it calls; wiring it to real inferenc
   or does not beat B′, per master §14's "if C doesn't beat B, show it honestly". It also always
   ends by stating this is one live image, not the study's statistical result.
 
-## What this phase does NOT do
+## What this frontend does NOT do
 
-Implement the backend. `docs/api_contract.md` is the binding spec Phase 11 must satisfy; nothing
-here fabricates a response to stand in for it.
+Compute any pixel data itself. Every mask, overlay, error map and metric value shown on screen
+was computed by `backend/` from a real checkpoint's real forward pass; this directory only
+fetches and displays it (`docs/api_contract.md` is the binding contract).

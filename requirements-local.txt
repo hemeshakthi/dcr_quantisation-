@@ -27,3 +27,7 @@ imagehash>=4.3.1
 tensorboard>=2.14.0
 thop>=0.1.1
 pytest>=7.4.3
+fastapi>=0.109.0             # backend/ (Phase 11) -- matches requirements.txt's Kaggle-era pin
+uvicorn>=0.27.0
+httpx>=0.28.1                 # fastapi.testclient.TestClient requires it since fastapi 0.109
+python-multipart>=0.0.6
