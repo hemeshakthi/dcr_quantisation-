@@ -1,0 +1,59 @@
+{
+  "phase": 12,
+  "synthetic": true,
+  "warning": "Figure 1's SELECTION ran on real curvature data; the rendered 'model outputs' in all 3 figures are SYNTHETIC (morphologically damaged/recovered GT masks and a seeded synthetic metric trend) because no trained checkpoint exists yet.",
+  "figure1_selection": {
+    "rule": "stratified-random + median per curvature bin",
+    "seed": 42,
+    "metric_col": "curvature_score",
+    "n_per_bin": 2,
+    "split": "test",
+    "curvature_csv": "C:\\Users\\Shakthi Vyas\\dcr_hemeshakthi\\data\\curvature\\curvature_bins.csv",
+    "selection": [
+      {
+        "bin": "high",
+        "role": "median",
+        "image_id": "stardist_tcell/Training dataset/Training_source_T cells 20017.tif_1ae4daca-0425-4dc5-825d-f5f5114b797d.tif",
+        "curvature_score": 0.201102868274812
+      },
+      {
+        "bin": "high",
+        "role": "stratified_random",
+        "image_id": "stardist_tcell/Training dataset/Training_source_T cells 20004.tif_891e1ab7-2e2c-40e8-ae83-120edb692d8f.tif",
+        "curvature_score": 0.2038919166636452
+      },
+      {
+        "bin": "low",
+        "role": "median",
+        "image_id": "stardist_tcell/Training dataset/Training_source_T cells 20014.tif_1397f33b-42a4-4432-8565-40db2d0d47e0.tif",
+        "curvature_score": 0.1758555934042753
+      },
+      {
+        "bin": "low",
+        "role": "stratified_random",
+        "image_id": "stardist_tcell/Training dataset/Training_source_T cells 20015.tif_6a6ffc6e-bbb8-43a1-b050-5b60ae201521.tif",
+        "curvature_score": 0.17709529837563
+      },
+      {
+        "bin": "mid",
+        "role": "median",
+        "image_id": "stardist_flowchamber/Training dataset/FOV2 B0018.tif",
+        "curvature_score": 0.1713625545304324
+      },
+      {
+        "bin": "mid",
+        "role": "stratified_random",
+        "image_id": "stardist_flowchamber/Training dataset/FOV2 B0015.tif",
+        "curvature_score": 0.1688559461373656
+      }
+    ]
+  },
+  "figure2_band_width": 3,
+  "figure2_marked_pixels": {
+    "B": 5762,
+    "C": 294
+  },
+  "n_failed": 0,
+  "n_warnings": 0,
+  "failures": []
+}
